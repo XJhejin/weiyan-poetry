@@ -129,6 +129,18 @@ class ChatIntegration(unittest.TestCase):
     def send(self,body,mid,cid=None,image_id=None):
         return self.alice.request('/api/messages',dict(conversation_id=cid or self.cid,body=body,client_id=mid,image_id=image_id),expected=201)['message']
 
+    def assert_queue_cleared(self,mid):
+        # The response can arrive while the final SQLite context is committing.
+        # Wait for that transaction without initiating additional delivery work.
+        pending=[]
+        for _ in range(100):
+            with self.db() as db:
+                exists=db.execute('select 1 from relay_packets where id=?',(mid,)).fetchone()
+                pending=[tuple(r) for r in db.execute('select device_id from deliveries where packet_id=?',(mid,))]
+            if exists is None:return
+            time.sleep(.05)
+        self.fail(f'Ciphertext was not deleted after confirmations; pending devices: {pending}')
+
     def raw_server(self,session):
         remote=Session(self.server_base);remote.cookies=session.cookies;remote.opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(remote.cookies));return remote
 
@@ -167,7 +179,7 @@ class ChatIntegration(unittest.TestCase):
         self.assertEqual(received['body'],marker);self.assertTrue(received['encrypted'])
         self.assertEqual(self.bob.request(received['image']),base64.b64decode(png))
         self.assertEqual(self.eve.request('/api/search?q='+urllib.parse.quote(marker))['messages'],[])
-        with self.db() as db:self.assertIsNone(db.execute('select 1 from relay_packets where id=?',(message['id'],)).fetchone())
+        self.assert_queue_cleared(message['id'])
         self.assertFalse((Path(self.env['WEIYAN_DATA_DIR'])/'uploads').exists())
         for file in Path(self.env['WEIYAN_CLIENT_DATA']).rglob('history.sqlite3*'):
             self.assertNotIn(marker.encode(),file.read_bytes())
@@ -268,7 +280,7 @@ class ChatIntegration(unittest.TestCase):
         history=self.bob.request('/api/conversations/'+self.cid+'/messages')['messages']
         self.assertTrue(any(m['client_id']=='permanent-001' for m in history))
         self.new_bob.request('/api/bootstrap')
-        with self.db() as db:self.assertIsNone(db.execute('select 1 from relay_packets where id=?',(msg['id'],)).fetchone())
+        self.assert_queue_cleared(msg['id'])
 
     def test_08_five_megabyte_image_roundtrip(self):
         png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=')
