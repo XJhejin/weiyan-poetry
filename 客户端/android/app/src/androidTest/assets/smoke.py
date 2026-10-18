@@ -51,4 +51,26 @@ assert base64.b64decode(stored['data']) == file
 assert file not in b.vault.db_path.read_bytes()
 again = SecureClient(Path(test_profile) / 'android_b', server_url, b.cookie, bob.call('/api/bootstrap'))
 assert any(m['body'] == secret for m in again.vault.messages(cid))
+new = SecureClient(Path(test_profile) / 'android_b_new', server_url, b.cookie, bob.call('/api/bootstrap'))
+sync_cid = 'sync:' + b.me['id']
+for device in (b, new):
+    directory, changed, digest = device.directory(sync_cid)
+    assert changed
+    device.directory(sync_cid, approve=True, expected=digest)
+for _ in range(20):
+    new.receive()
+    b.receive()
+    if new.vault.message(a.me['id'], sent['client_id']):
+        break
+copied = new.vault.message(a.me['id'], sent['client_id'])
+assert copied and any(m['body'] == secret for m in new.vault.messages(cid))
+assert base64.b64decode(new.vault.get('file', copied['attachment']['url'].rsplit('/', 1)[-1])['data']) == file
+directory, changed, digest = a.directory(cid)
+assert changed
+a.directory(cid, approve=True, expected=digest)
+a.recall({'id': sent['id'], 'client_id': sent['client_id']})
+for device in (b, new):
+    device.receive()
+    recalled = device.vault.message(a.me['id'], sent['client_id'])
+    assert recalled['recalled'] and 'attachment' not in recalled
 smoke_result = 'PASS'

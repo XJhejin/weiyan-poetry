@@ -93,6 +93,7 @@ public class MainActivity extends Activity {
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web,false);
         web.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view,String url){if(isLocal(url))openNotificationConversation();}
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (isLocal(request.getUrl().toString())) return false;
                 if (request.isForMainFrame() && ("https".equals(request.getUrl().getScheme()) || "http".equals(request.getUrl().getScheme()))) {
@@ -149,6 +150,14 @@ public class MainActivity extends Activity {
         Uri uri = Uri.parse(url), base = Uri.parse(baseUrl);
         return "http".equals(uri.getScheme()) && "127.0.0.1".equals(uri.getHost()) && uri.getPort() == base.getPort();
     }
+
+    private void openNotificationConversation(){
+        String cid=getIntent().getStringExtra("conversation_id");
+        if(web==null||cid==null||cid.isEmpty()||cid.length()>128)return;
+        web.evaluateJavascript("window.weiyanOpenNotification && window.weiyanOpenNotification("+org.json.JSONObject.quote(cid)+")",null);
+        getIntent().removeExtra("conversation_id");
+    }
+    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);openNotificationConversation();}
 
     @Override protected void onActivityResult(int request,int result,Intent data) {
         super.onActivityResult(request,result,data);

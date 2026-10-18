@@ -450,4 +450,84 @@ class ChatIntegration(unittest.TestCase):
         self.assertEqual(self.bob.request(profile_path)['users'][0]['avatar'], 'flower')
 
 
+    def test_14_recall_authorization_deadline_offline_and_attachments(self):
+        for index, kind in enumerate(('text', 'image', 'file', 'video')):
+            payload = {'conversation_id': self.cid, 'body': 'recall-private-marker-1182', 'client_id': 'recall-test-' + str(index)}
+            if kind == 'image':
+                payload['image_id'] = self.alice.request('/api/upload', {'data': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='})['id']
+            elif kind in ('file', 'video'):
+                raw = b'\x00\x00\x00\x18ftypmp42private-attachment' if kind == 'video' else b'private-attachment'
+                payload['file_id'] = self.alice.request('/api/attachments', {'name': 'test.mp4' if kind == 'video' else 'test.txt', 'kind': kind, 'data': base64.b64encode(raw).decode()})['id']
+            original = self.alice.request('/api/messages', payload, expected=201)['message']
+            target = {'id': original['id'], 'client_id': original['client_id']}
+            self.bob.request('/api/recall', target, expected=400)
+            self.raw_server(self.bob).request('/api/keys?conversation_id=' + self.cid + '&recall_id=' + str(original['id']) + '&recall_client_id=' + original['client_id'], expected=403)
+            # One recipient has read it; the other is offline for the whole recall.
+            self.bob.request('/api/conversations/' + self.cid + '/messages')
+            recalled = self.alice.request('/api/recall', target)['message']
+            self.assertTrue(recalled['recalled']); self.assertIsNone(recalled['image']); self.assertNotIn('attachment', recalled)
+            self.assertEqual(self.alice.request('/api/recall', target)['message'], recalled)
+            with self.db() as db:
+                self.assertIsNone(db.execute('SELECT 1 FROM relay_packets WHERE id=?', (original['id'],)).fetchone())
+            for session in (self.bob, self.new_bob):
+                history = session.request('/api/conversations/' + self.cid + '/messages')['messages']
+                m = next(m for m in history if m['id'] == original['id'])
+                self.assertTrue(m['recalled']); self.assertEqual(m['body'], '消息已撤回'); self.assertNotIn('attachment', m)
+            if original.get('image'):
+                self.alice.request(original['image'], expected=404)
+            if original.get('attachment'):
+                self.alice.request(original['attachment']['url'], expected=404)
+        expired = self.send('deadline', 'recall-expired')
+        with self.db() as db:
+            db.execute('UPDATE receipts SET created_at=? WHERE id=?', (time.time()-121, expired['id']))
+        self.alice.request('/api/recall', {'id': expired['id'], 'client_id': expired['client_id']}, expected=409)
+        with self.db() as db:
+            self.assertIsNotNone(db.execute('SELECT 1 FROM relay_packets WHERE id=?', (expired['id'],)).fetchone())
+
+    def test_15_same_account_history_sync_requires_trust_and_preserves_recall(self):
+        # A third profile starts empty, then obtains encrypted history from the old device.
+        for session in (self.bob, self.new_bob):
+            session.request('/api/bootstrap')
+        expected = {m['id'] for m in self.bob.request('/api/conversations/' + self.cid + '/messages')['messages']}
+        port = free_port(); env = self.env.copy(); env['WEIYAN_CLIENT_DATA'] = str(Path(self.temp.name)/'third-client')
+        process = self.start_client(port, env)
+        newcomer = Session(f'http://127.0.0.1:{port}')
+        try:
+            newcomer.request('/api/login', {'username': 'bob_test', 'password': 'test-password-b'})
+            newcomer.request('/api/bootstrap')
+            sync_cid = 'sync:' + self.bob_id
+            self.raw_server(self.alice).request('/api/keys?conversation_id=' + sync_cid, expected=403)
+            self.assertEqual(newcomer.request('/api/conversations/' + self.cid + '/messages')['messages'], [])
+            for session in (self.bob, self.new_bob, newcomer):
+                info = session.request('/desktop/security?conversation_id=' + sync_cid)
+                self.assertTrue(info['key_changed'])
+                session.request('/desktop/security', {'conversation_id': sync_cid, 'approve': True, 'directory_digest': info['directory_digest']})
+            until = time.time()+45; synced = []
+            while time.time() < until:
+                for session in (newcomer, self.bob, self.new_bob): session.request('/api/bootstrap')
+                page = newcomer.request('/api/conversations/' + self.cid + '/messages')
+                synced = page['messages'][:]
+                while page['has_more']:
+                    page = newcomer.request('/api/conversations/' + self.cid + '/messages?before=' + str(page['messages'][0]['id']))
+                    synced = page['messages'] + synced
+                if expected <= {m['id'] for m in synced}: break
+                time.sleep(.1)
+            self.assertEqual(expected, {m['id'] for m in synced}, {'missing': sorted(expected-{m['id'] for m in synced}), 'received': len(synced), 'new': newcomer.request('/api/bootstrap')['security'], 'old': self.bob.request('/api/bootstrap')['security']})
+            self.assertLessEqual(len(synced), 50)
+            recalled = newcomer.request('/api/search?q=' + urllib.parse.quote('消息已撤回'))['messages']
+            self.assertGreaterEqual(len(recalled), 4)
+            history = newcomer.request('/api/conversations/' + self.cid + '/messages')['messages']
+            file_message = next(m for m in history if m.get('attachment'))
+            self.assertTrue(newcomer.request(file_message['attachment']['url']))
+            own = self.new_bob.request('/api/messages', {'conversation_id': self.cid, 'client_id': 'own-device-sync', 'body': 'same-account-own-message'}, expected=201)['message']
+            for session in (newcomer, self.bob):
+                history = session.request('/api/conversations/' + self.cid + '/messages')['messages']
+                self.assertTrue(any(m['id'] == own['id'] and m['sender']['id'] == self.bob_id for m in history))
+            with self.db() as db:
+                for row in db.execute("SELECT envelope FROM relay_packets"):
+                    self.assertNotIn(b'same-account-own-message', row[0]); self.assertNotIn(b'private-attachment', row[0])
+        finally:
+            self.stop_process(process)
+
+
 if __name__=='__main__':unittest.main(verbosity=2)

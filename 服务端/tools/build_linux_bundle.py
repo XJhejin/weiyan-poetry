@@ -15,10 +15,12 @@ from release_config import VERSION
 
 FILES = (
     "server.py", "relay_core.py", "groups.py", "friends.py", "avatars.py",
-    "listening.py", "migration.py", "release_config.py", "requirements-headless.txt",
+    "listening.py", "migration.py", "release_config.py", "requirements-headless.txt", "admin.py", "update.py",
+    "admin_ui/index.html", "admin_ui/admin.js", "admin_ui/admin.css", "admin_ui/motion.js", "admin_ui/logo.svg", "admin_ui/logo.ico",
     "deploy/linux/weiyan-server.service", "deploy/linux/server.env.example",
     "deploy/linux/部署说明.md", "deploy/linux/Caddyfile.example",
     "deploy/linux/weiyan-proxy.service",
+    "deploy/linux/control_gateway.py",
 )
 
 

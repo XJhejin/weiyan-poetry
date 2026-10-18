@@ -6,12 +6,12 @@ After=network.target
 Type=simple
 User=weiyan
 Group=weiyan
-WorkingDirectory=/opt/weiyan/server
+WorkingDirectory=/opt/weiyan/current/server
 EnvironmentFile=/etc/weiyan/server.env
 Environment=WEIYAN_DATA_DIR=/var/lib/weiyan
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/opt/weiyan/venv/bin/python /opt/weiyan/server/server.py --headless --host ${WEIYAN_HOST} --port ${WEIYAN_PORT}
+ExecStart=/opt/weiyan/current/venv/bin/python /opt/weiyan/current/server/server.py --browser --no-open --admin-port 23175 --admin-url-file /var/lib/weiyan/admin-url --host ${WEIYAN_HOST} --port ${WEIYAN_PORT}
 KillSignal=SIGINT
 TimeoutStopSec=30
 Restart=on-failure

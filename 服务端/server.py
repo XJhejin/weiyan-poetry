@@ -339,7 +339,12 @@ class Handler(BaseHTTPRequestHandler):
                         return self.json_response({'users': [public_user(row) for row in rows]})
                     if path == "/api/keys":
                         cid = params.get("conversation_id", [""])[0]
-                        access(db, cid, uid)
+                        if 'recall_id' in params:
+                            original, devices = relay.recall_directory(db, uid, {'id': integer(params['recall_id'][0]), 'client_id': params.get('recall_client_id', [''])[0]}, ApiError)
+                            if original['conversation_id'] != cid:
+                                raise ApiError('撤回会话不匹配。', 403)
+                            return self.json_response({'devices': devices})
+                        relay.check_access(db, cid, uid, access, ApiError)
                         if params.get('receiving', [''])[0] == '1':
                             return self.json_response({'devices': relay.receive_directory(db, cid, uid, params.get('device_id', [''])[0], ApiError)})
                         return self.json_response({"devices": relay.directory(db, cid)})
@@ -636,6 +641,7 @@ def main():
     parser.add_argument("--browser", action="store_true", help="浏览器预览管理界面")
     parser.add_argument("--admin-port", type=int, default=0)
     parser.add_argument("--no-open", action="store_true")
+    parser.add_argument('--admin-url-file', type=Path, help='将本机管理入口写入受限文件，不输出到日志')
     parser.add_argument('--check-update-runtime', metavar='REPORT', help=argparse.SUPPRESS)
     parser.add_argument('--check-github-update', metavar='REPORT', help=argparse.SUPPRESS)
     args = parser.parse_args()

@@ -81,6 +81,13 @@ public class SmokeInstrumentation extends Instrumentation {
             js(web,"closeModal();document.querySelector('#message-input').value='安卓加密消息';sendMessage();");
             waitJs(web,"[...state.messages.values()].some(m=>m.body==='安卓加密消息'&&m.encrypted)");
             if(!"true".equals(js(web,"document.querySelector('#file-button')!==null && document.querySelector('#video-button')!==null && document.querySelector('#encryption-info')!==null")))throw new AssertionError("Phone controls missing");
+            js(web,"window.weiyanSetMessageNotices(true);window.popupOldActive=state.active;window.popupOldMessages=state.messages;state.active='test-other-conversation';state.messages=new Map();window.popupCid='room:lobby';window.popupTestMessage={id:9000001,client_id:'popup-only-test',conversation_id:window.popupCid,sender:{id:'popup-peer',nickname:'提醒验证',avatar:'flower'},body:'popup-private-body-3348',created_at:new Date().toISOString()};receiveMessage(window.popupTestMessage);");
+            waitJs(web,"document.querySelector('#message-popup').hidden===false");
+            if(!"true".equals(js(web,"!document.querySelector('#message-popup').textContent.includes('popup-private-body')")))throw new AssertionError("Foreground banner revealed plaintext");
+            js(web,"document.querySelector('.message-popup-close').click();let oldMuted=stored('muted',[]);store('muted',[...oldMuted,window.popupCid]);receiveMessage({...window.popupTestMessage,id:9000002});window.popupWasSuppressed=document.querySelector('#message-popup').hidden;store('muted',oldMuted);state.active=window.popupOldActive;state.messages=window.popupOldMessages;renderMessages();");
+            if(!"true".equals(js(web,"window.popupWasSuppressed")))throw new AssertionError("Muted conversation triggered foreground banner");
+            js(web,"post('/api/recall',{id:[...state.messages.values()].find(m=>m.body==='安卓加密消息').id,client_id:[...state.messages.values()].find(m=>m.body==='安卓加密消息').client_id}).then(r=>receiveMessage(r.message)).catch(e=>window.uiError=e.message)");
+            waitJs(web,"[...state.messages.values()].some(m=>m.recalled) && document.querySelector('.recalled-message')!==null");
             try(InputStream in=getContext().getAssets().open("smoke.py")){
                 String code=new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
                 PyObject globals=Python.getInstance().getModule("builtins").callAttr("dict");
@@ -92,6 +99,8 @@ public class SmokeInstrumentation extends Instrumentation {
                 Python.getInstance().getModule("builtins").callAttr("exec",
                     "from mobile import _gateway\n_gateway.background.activate(b, bob.call('/api/bootstrap'))\nb.active_sockets=1\na.send({'conversation_id':cid,'body':'notification-private-body-6628','client_id':'notify-'+secrets.token_hex(8)})",globals);
                 android.app.NotificationManager manager=(android.app.NotificationManager)getTargetContext().getSystemService(android.content.Context.NOTIFICATION_SERVICE);
+                android.app.NotificationChannel channel=manager.getNotificationChannel("encrypted_messages_popup_v2");
+                if(channel==null||channel.getImportance()!=android.app.NotificationManager.IMPORTANCE_HIGH)throw new AssertionError("New message channel must allow heads-up banners");
                 boolean notified=false;
                 for(int i=0;i<60&&!notified;i++){
                     for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2){
@@ -123,6 +132,8 @@ public class SmokeInstrumentation extends Instrumentation {
                 NotificationService.setEnabled(true);
                 for(int i=0;i<40&&!NotificationService.isRunning();i++)Thread.sleep(100);
                 if(!NotificationService.isEnabled()||!NotificationService.isRunning())throw new AssertionError("User could not resume background reception");
+                getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).putExtra("conversation_id","room:lobby").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+                waitJs(web,"state.active==='room:lobby'");
             }
             result.putString("WeiyanSmoke","PASS");finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("WeiyanSmoke","FAIL: "+android.util.Log.getStackTraceString(e));finish(Activity.RESULT_CANCELED,result);}

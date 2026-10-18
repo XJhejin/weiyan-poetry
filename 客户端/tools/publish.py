@@ -35,9 +35,9 @@ def run(args, capture=False):
 
 
 def prepare():
-    configs = [runpy.run_path(str(ROOT / folder / 'release_config.py')) for folder in ('客户端', '服务端')]
+    configs = [runpy.run_path(str(ROOT / folder / 'release_config.py')) for folder in ('客户端', '服务端', '服务器控制端')]
     values = [{k: c[k] for k in ('VERSION', 'REPOSITORY', 'RELEASE_PUBLIC_KEY')} for c in configs]
-    if values[0] != values[1] or values[0]['REPOSITORY'].startswith('PENDING/'):
+    if any(value != values[0] for value in values[1:]) or values[0]['REPOSITORY'].startswith('PENDING/'):
         raise SystemExit('请先统一客户端和服务端的版本、仓库与发布公钥。')
     if (ROOT / '客户端/update.py').read_bytes() != (ROOT / '服务端/update.py').read_bytes():
         raise SystemExit('两份更新程序必须一致。')
@@ -82,6 +82,8 @@ def prepare():
         ('client_windows_msi', f'weiyan-client-{config["VERSION"]}-windows-x64.msi'),
         ('client_android', f'weiyan-client-{config["VERSION"]}-android.apk'),
         ('server_macos_arm64', f'weiyan-server-{config["VERSION"]}-macos-arm64.dmg'),
+        ('control_windows_msi', f'weiyan-control-{config["VERSION"]}-windows-x64.msi'),
+        ('server_linux_source', f'weiyan-server-{config["VERSION"]}-linux-source.tar.gz'),
     ):
         source = ROOT / 'build-output' / name
         if not source.is_file():
@@ -122,13 +124,18 @@ def main():
 
 安装包：
 - Windows 客户端：`weiyan-client-{config['VERSION']}-windows-x64.msi`。安装后自动创建桌面与开始菜单快捷方式。
+- Windows 服务器控制端：`weiyan-control-{config['VERSION']}-windows-x64.msi`。独立安装，通过受限 SSH 授权管理远程服务器；安装包不包含管理私钥。
 - 安卓客户端：`weiyan-client-{config['VERSION']}-android.apk`。Android 7.0+，ARM64 或 x86_64；由维护者固定证书签名。
 - Apple Silicon Mac 服务端：`weiyan-server-{config['VERSION']}-macos-arm64.dmg`。打开后拖入 Applications。
 - Windows 客户端与服务端便携 ZIP 继续提供；完整解压并保留 `_internal`，无需安装 Python。
 
 功能：
+- 新增两分钟内消息撤回，支持文字、图片、文件与视频，离线消息同步撤回。
+- 同账号多设备在双方核对指纹后加密同步每个会话最近 50 条记录及附件，自己发送的新消息同步到其他已登记设备。
+- Android 新增前台横幅与后台系统消息弹窗，点击可进入会话；不展示聊天正文并遵循免打扰设置。
 - 2.1.3 将 Windows 和安卓客户端默认连接更新为 156.225.28.175:23074；升级时迁移旧官方默认地址，保留其他自定义地址。
 - 提供 Linux 无界面运行依赖、独立数据目录、systemd 开机自启模板和不含用户资料的源码部署包。
+- 新增独立服务器控制端：查看远程运行状态、内存与磁盘、账号与设备、密文队列及运行日志；支持服务重启和 GitHub 签名更新，启动失败恢复原程序及更新前数据库。
 - 2.1.2 增加服务端自定义 IPv4/IPv6 监听、配置保存和准确的客户端连接地址；修改前先停止服务，启动成功后自动保存。
 - 修复 Mac 服务端 GitHub 更新检查：随包提供 CA 证书，保留 HTTPS 验证；API 不可用时尝试 GitHub Releases 签名清单。旧版无法检查更新时请手动下载本页 DMG 覆盖应用一次。
 - Android 后台接收开关与后台设置入口；允许接收时重启/覆盖升级恢复服务，明确停止后不自行恢复。适配状态栏及刘海/挖孔安全区域，顶部增加 8 dp，禁止双指缩放。
@@ -148,7 +155,7 @@ def main():
 
 Mac 构建仅作临时签名，未取得 Apple Developer ID 公证，首次打开需在 macOS 系统设置确认来源。
 安卓省电策略、强行停止或系统清理可能中断后台接收；重新打开后补收。未提供厂商云推送。
-加密协议尚未独立安全审计，无双棘轮前向保密；首次通信请核对设备指纹。新设备不能恢复旧设备历史。
+加密协议尚未独立安全审计，无双棘轮前向保密；首次通信请核对设备指纹。新设备需与保存旧记录的设备双方核对指纹并确认信任，再由旧设备上线加密同步。
 更新保留用户资料；Mac 服务端资料位于 `~/Library/Application Support/WeiyanPoetry/server`。
 
 发布源码提交：{commit}

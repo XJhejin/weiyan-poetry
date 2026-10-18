@@ -15,7 +15,7 @@ public class NotificationService extends Service {
     private static Context application;
     private int unread;
     private NotificationManager manager;
-    private static final String RUNNING="encrypted_receiver",MESSAGES="encrypted_messages";
+    private static final String RUNNING="encrypted_receiver",LEGACY_MESSAGES="encrypted_messages",MESSAGES="encrypted_messages_popup_v2";
     static void initialize(Context context){application=context.getApplicationContext();preferences().edit().putBoolean("initialized",true).apply();}
     private static SharedPreferences preferences(){return application.getSharedPreferences("background-reception",Context.MODE_PRIVATE);}
     public static boolean isEnabled(){return application!=null&&preferences().getBoolean("enabled",true);}
@@ -36,7 +36,15 @@ public class NotificationService extends Service {
         super.onCreate();initialize(this);active=this;manager=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);
         if(Build.VERSION.SDK_INT>=26){
             NotificationChannel running=new NotificationChannel(RUNNING,"后台消息接收",NotificationManager.IMPORTANCE_LOW);running.setDescription("维持与自建服务端的加密消息连接");running.setShowBadge(false);manager.createNotificationChannel(running);
-            NotificationChannel messages=new NotificationChannel(MESSAGES,"新消息提醒",NotificationManager.IMPORTANCE_DEFAULT);messages.setDescription("仅提示收到消息，不在通知中显示聊天正文");messages.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);manager.createNotificationChannel(messages);
+            if(manager.getNotificationChannel(MESSAGES)==null){
+                NotificationChannel previous=manager.getNotificationChannel(LEGACY_MESSAGES);
+                boolean userChoice=previous!=null&&(previous.getImportance()<NotificationManager.IMPORTANCE_DEFAULT||(Build.VERSION.SDK_INT>=29&&previous.hasUserSetImportance()));
+                NotificationChannel messages=new NotificationChannel(MESSAGES,"新消息弹窗提醒",userChoice?previous.getImportance():NotificationManager.IMPORTANCE_HIGH);
+                messages.setDescription("收到消息时显示系统横幅，不显示聊天正文");messages.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);
+                messages.enableVibration(previous==null||!userChoice||previous.shouldVibrate());
+                if(previous!=null)messages.setSound(previous.getSound(),previous.getAudioAttributes());
+                manager.createNotificationChannel(messages);
+            }
         }
         startForeground(1,running());
         new Thread(()->{try{ClientRuntime.start(getApplicationContext());}catch(Exception e){stopSelf();}},"encrypted-receiver-start").start();
@@ -54,10 +62,12 @@ public class NotificationService extends Service {
         service.unread++;
         Notification notification=service.builder(MESSAGES).setSmallIcon(R.drawable.logo).setContentTitle("未言诗集 · "+service.unread+" 条新消息")
             .setContentText("收到新的加密消息，打开客户端查看。").setContentIntent(service.open(cid)).setAutoCancel(true)
-            .setVisibility(Notification.VISIBILITY_PRIVATE).setNumber(service.unread).build();
+            .setVisibility(Notification.VISIBILITY_PRIVATE).setCategory(Notification.CATEGORY_MESSAGE).setPriority(Notification.PRIORITY_HIGH)
+            .setDefaults(Notification.DEFAULT_ALL).setNumber(service.unread).build();
         service.manager.notify(2,notification);
     }
     public static void clearUnread(){NotificationService service=active;if(service!=null){service.unread=0;service.manager.cancel(2);}}
+    public static void openMessageSettings(){if(application==null)return;Intent intent=Build.VERSION.SDK_INT>=26?new Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,application.getPackageName()).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID,MESSAGES):new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:"+application.getPackageName()));application.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent!=null&&"stop".equals(intent.getAction()))preferences().edit().putBoolean("enabled",false).commit();
         if(!isEnabled()){clearUnread();stopForeground(true);stopSelf();return START_NOT_STICKY;}

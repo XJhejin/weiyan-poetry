@@ -38,6 +38,7 @@ def initialize(db, data):
     CREATE TABLE IF NOT EXISTS receipts(id INTEGER PRIMARY KEY AUTOINCREMENT,sender_id TEXT NOT NULL,client_id TEXT NOT NULL,conversation_id TEXT NOT NULL,digest TEXT NOT NULL,created_at REAL NOT NULL,UNIQUE(sender_id,client_id));
     CREATE TABLE IF NOT EXISTS relay_packets(id INTEGER PRIMARY KEY REFERENCES receipts(id),envelope BLOB NOT NULL);
     CREATE TABLE IF NOT EXISTS deliveries(packet_id INTEGER NOT NULL REFERENCES relay_packets(id) ON DELETE CASCADE,device_id TEXT NOT NULL REFERENCES devices(id),PRIMARY KEY(packet_id,device_id));
+    CREATE TABLE IF NOT EXISTS receipt_targets(packet_id INTEGER NOT NULL,device_id TEXT NOT NULL,PRIMARY KEY(packet_id,device_id));
     """)
     db.execute("INSERT OR IGNORE INTO settings VALUES ('server_id',?)", (secrets.token_hex(16),))
     db.execute("INSERT OR IGNORE INTO settings VALUES ('registration','1')")
@@ -77,15 +78,42 @@ def cleanup(db):
     db.execute("PRAGMA secure_delete=ON")
     db.execute("DELETE FROM relay_packets WHERE NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.packet_id=relay_packets.id)")
     db.execute("DELETE FROM receipts WHERE created_at<? AND id NOT IN(SELECT id FROM relay_packets)", (time.time() - 30 * 86400,))
+    db.execute('DELETE FROM receipt_targets WHERE packet_id NOT IN (SELECT id FROM receipts WHERE created_at>=?)', (time.time() - 180,))
 
 
 def directory(db, cid):
     room = cid.startswith("room:")
     sql = "SELECT d.id device_id,d.user_id,d.box_key,d.sign_key,d.name,u.nickname FROM devices d JOIN users u ON u.id=d.user_id WHERE d.revoked=0 AND u.disabled=0"
-    if not room:
+    if cid.startswith('sync:'):
+        sql += ' AND d.user_id=?'
+    elif not room:
         sql += " AND EXISTS (SELECT 1 FROM members m WHERE m.conversation_id=? AND m.user_id=d.user_id)"
-    rows = db.execute(sql + " ORDER BY d.user_id,d.id", () if room else (cid,)).fetchall()
+    rows = db.execute(sql + " ORDER BY d.user_id,d.id", () if room else (cid[5:] if cid.startswith('sync:') else cid,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def check_access(db, cid, uid, access, error):
+    if cid.startswith('sync:'):
+        if cid != 'sync:' + uid:
+            raise error('只能同步自己的设备。', 403)
+    else:
+        access(db, cid, uid)
+
+
+def recall_directory(db, uid, target, error):
+    if not isinstance(target, dict) or set(target) != {'id', 'client_id'} or type(target['id']) is not int:
+        raise error('撤回消息编号无效。')
+    original = db.execute('SELECT * FROM receipts WHERE id=?', (target['id'],)).fetchone()
+    if not original or original['sender_id'] != uid or original['client_id'] != target['client_id'] or original['conversation_id'].startswith('sync:'):
+        raise error('只能撤回自己发送的消息。', 403)
+    if time.time() - original['created_at'] > 120:
+        raise error('消息发送已超过两分钟，无法撤回。', 409)
+    rows = db.execute('''SELECT DISTINCT d.id device_id,d.user_id,d.box_key,d.sign_key,d.name,u.nickname
+        FROM devices d JOIN users u ON u.id=d.user_id WHERE d.revoked=0 AND u.disabled=0 AND
+        (d.user_id=? OR d.id IN (SELECT device_id FROM receipt_targets WHERE packet_id=?)
+         OR d.id IN (SELECT device_id FROM deliveries WHERE packet_id=?)) ORDER BY d.user_id,d.id''',
+        (uid, target['id'], target['id']))
+    return original, [dict(r) for r in rows]
 
 
 def receive_directory(db, cid, uid, device_id, error):
@@ -135,12 +163,14 @@ def register_device(db, uid, payload, error):
 def relay(db, uid, payload, access, error, events):
     db.execute('BEGIN IMMEDIATE')
     packet = payload.get("envelope")
-    if not isinstance(packet, dict) or set(packet) != {"v", "conversation_id", "sender_id", "device_id", "client_id", "ciphertext", "keys", "signature"}:
+    required = {"v", "conversation_id", "sender_id", "device_id", "client_id", "ciphertext", "keys", "signature"}
+    if not isinstance(packet, dict) or not required <= set(packet) or set(packet) - required not in (set(), {'recall_of'}, {'sync_to'}):
         raise error("仅接受端到端加密消息。")
     cid = packet["conversation_id"]
     if not isinstance(cid, str) or len(cid) > 128:
         raise error("会话格式不正确。")
-    access(db, cid, uid)
+    if 'recall_of' not in packet:
+        check_access(db, cid, uid, access, error)
     if packet["v"] != 2 or packet["sender_id"] != uid or not isinstance(packet["client_id"], str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", packet["client_id"]):
         raise error("加密消息身份不正确。")
     device = db.execute("SELECT * FROM devices WHERE id=? AND user_id=? AND revoked=0", (packet["device_id"], uid)).fetchone()
@@ -165,8 +195,19 @@ def relay(db, uid, payload, access, error, events):
         if old["digest"] != digest or old["conversation_id"] != cid:
             raise error("重复消息内容不一致。", 409)
         return {"id": old["id"], "queued": True}
-    targets = directory(db, cid)
-    groups.check_speaking(db, cid, uid, error)
+    if 'recall_of' in packet:
+        original, targets = recall_directory(db, uid, packet['recall_of'], error)
+        if original['conversation_id'] != cid:
+            raise error('撤回消息与会话不匹配。', 403)
+    elif cid.startswith('sync:'):
+        targets = [d for d in directory(db, cid) if d['device_id'] in (packet['device_id'], packet.get('sync_to'))]
+        if packet.get('sync_to') == packet['device_id'] or len(targets) != 2:
+            raise error('同步目标必须是自己的其他有效设备。', 403)
+    else:
+        if 'sync_to' in packet:
+            raise error('同步会话无效。', 403)
+        targets = directory(db, cid)
+        groups.check_speaking(db, cid, uid, error)
     # An old directory may omit newly added devices. Reject rather than send a
     # message that the UI incorrectly describes as available on every device.
     if set(packet["keys"]) != {d["device_id"] for d in targets}:
@@ -175,6 +216,10 @@ def relay(db, uid, payload, access, error, events):
     cursor = db.execute("INSERT INTO receipts(sender_id,client_id,conversation_id,digest,created_at) VALUES (?,?,?,?,?)", (uid, packet["client_id"], cid, digest, time.time()))
     mid = cursor.lastrowid
     recipients = [d for d in targets if d["device_id"] != packet["device_id"]]
+    if 'recall_of' in packet:
+        db.execute('DELETE FROM relay_packets WHERE id=?', (packet['recall_of']['id'],))
+    elif not cid.startswith('sync:'):
+        db.executemany('INSERT INTO receipt_targets VALUES (?,?)', [(mid, d['device_id']) for d in targets])
     if recipients:
         db.execute("INSERT INTO relay_packets VALUES (?,?)", (mid, raw))
         db.executemany("INSERT INTO deliveries VALUES (?,?)", [(mid, d["device_id"]) for d in recipients])

@@ -212,6 +212,31 @@ class Vault:
             db.execute("INSERT INTO history VALUES (?,?,?,?,?)", (message["id"], message["conversation_id"], message["sender"]["id"], message["client_id"], self.pack("message", message["id"], message)))
             return True
 
+    def recall(self, target, sender, cid, created_at):
+        """A durable tombstone prevents delayed delivery or history sync resurrection."""
+        with self.lock, self.db() as db:
+            row = db.execute('SELECT id,value FROM history WHERE sender=? AND client_id=?', (sender['id'], target['client_id'])).fetchone()
+            previous = self.unpack('message', row[0], row[1]) if row else None
+            if previous and (previous['id'] != target['id'] or previous['conversation_id'] != cid):
+                raise SecurityError('撤回消息与原记录不匹配。')
+            conflict = db.execute('SELECT sender,client_id FROM history WHERE id=?', (target['id'],)).fetchone()
+            if conflict and tuple(conflict) != (sender['id'], target['client_id']):
+                raise SecurityError('撤回消息编号冲突。')
+            message = {'id': target['id'], 'client_id': target['client_id'], 'conversation_id': cid,
+                       'sender': sender, 'created_at': previous['created_at'] if previous else created_at,
+                       'body': '消息已撤回', 'image': None, 'encrypted': True, 'recalled': True}
+            db.execute('INSERT OR REPLACE INTO history VALUES (?,?,?,?,?)', (target['id'], cid, sender['id'], target['client_id'], self.pack('message', target['id'], message)))
+            if previous:
+                for kind, url in [('image', previous.get('image')), ('file', previous.get('attachment', {}).get('url'))]:
+                    if url:
+                        db.execute('DELETE FROM records WHERE kind=? AND key=?', (kind, url.rsplit('/', 1)[-1]))
+            saved = db.execute("SELECT value FROM records WHERE kind='ui' AND key='saved'").fetchone()
+            if saved:
+                values = self.unpack('ui', 'saved', saved[0])
+                values = [m for m in values if m.get('id') != target['id']]
+                db.execute("UPDATE records SET value=? WHERE kind='ui' AND key='saved'", (self.pack('ui', 'saved', values),))
+            return message
+
     def message(self, sender, client_id):
         with self.lock, self.db() as db:
             row = db.execute("SELECT id,value FROM history WHERE sender=? AND client_id=?", (sender, client_id)).fetchone()
@@ -233,7 +258,7 @@ class Vault:
         cid = conv["id"]
         read = self.get("read", cid, 0)
         with self.lock, self.db() as db:
-            count = db.execute("SELECT COUNT(*) FROM history WHERE cid=? AND id>? AND sender!=?", (cid, read, uid)).fetchone()[0]
+            count = sum(not self.unpack('message', mid, value).get('recalled') for mid, value in db.execute('SELECT id,value FROM history WHERE cid=? AND id>? AND sender!=?', (cid, read, uid)))
         last = self.messages(cid, limit=1)
         conv.update(last_message=last[0] if last else None, unread=count)
         return conv
@@ -249,6 +274,7 @@ class SecureClient:
         self.lock = threading.RLock()
         self.receive_lock = threading.Lock()
         self.poll_time = 0
+        self.sync_time = 0
         self.blocked = None
         keys = self.vault.get("identity", "keys")
         if keys is None:
@@ -257,6 +283,8 @@ class SecureClient:
         self.device_id = keys["device_id"]
         self.private = PrivateKey(unb64(keys["box"]))
         self.signing = SigningKey(unb64(keys["sign"]))
+        if self.vault.get('trust', self.me['id']) is None:
+            self.vault.put('trust', self.me['id'], {self.device_id: self.fingerprint({'box_key': b64(bytes(self.private.public_key)), 'sign_key': b64(bytes(self.signing.verify_key))})})
         device = {"device_id": self.device_id, "box_key": b64(bytes(self.private.public_key)), "sign_key": b64(bytes(self.signing.verify_key)), "name": "安卓客户端" if os.environ.get('WEIYAN_PLATFORM') == 'android' else "Windows 客户端"}
         proof = b64(self.signing.sign(DEVICE_DOMAIN + canonical(device)).signature)
         if not bootstrap.get('offline'):
@@ -285,8 +313,10 @@ class SecureClient:
         digest = hashlib.sha256(unb64(device["box_key"]) + unb64(device["sign_key"])).hexdigest().upper()
         return " ".join(digest[i:i+4] for i in range(0, len(digest), 4))
 
-    def directory(self, cid, approve=False, expected=None, receiving=False):
+    def directory(self, cid, approve=False, expected=None, receiving=False, recall=None):
         suffix = '&receiving=1&device_id=' + self.device_id if receiving else ''
+        if recall:
+            suffix = '&recall_id=' + str(recall['id']) + '&recall_client_id=' + quote(recall['client_id'])
         directory = self.remote("/api/keys?conversation_id=" + quote(cid) + suffix)["devices"]
         groups = {}
         for device in directory:
@@ -313,6 +343,162 @@ class SecureClient:
                 "fingerprint": self.fingerprint({"box_key": b64(bytes(self.private.public_key)), "sign_key": b64(bytes(self.signing.verify_key))}),
                 "devices": [{**d, "fingerprint": self.fingerprint(d), "changed": d["user_id"] in changed} for d in directory],
                 "key_changed": bool(changed), "directory_digest": digest, "privacy": policy}
+
+    def packet(self, cid, client_id, clear, directory, **extra):
+        key = secrets.token_bytes(32)
+        packet = {'v': 2, 'conversation_id': cid, 'sender_id': self.me['id'], 'device_id': self.device_id,
+                  'client_id': client_id, 'ciphertext': b64(bytes(SecretBox(key).encrypt(canonical(clear)))),
+                  'keys': {d['device_id']: b64(SealedBox(PublicKey(unb64(d['box_key']))).encrypt(key)) for d in directory}, **extra}
+        packet['signature'] = b64(self.signing.sign(DOMAIN + canonical(packet)).signature)
+        return packet
+
+    def control_send(self, cid, client_id, clear, directory, **extra):
+        # Persist the exact signed envelope across ambiguous network failures.
+        with self.lock:
+            done = self.vault.get('control_done', client_id)
+            if done:
+                return done
+            packet = self.vault.get('control_pending', client_id)
+            if packet is None:
+                packet = self.packet(cid, client_id, clear, directory, **extra)
+                self.vault.put('control_pending', client_id, packet)
+            try:
+                result = self.remote('/api/relay', {'envelope': packet})
+            except RemoteError as error:
+                if error.status == 409 and '设备列表' in str(error):
+                    self.vault.delete('control_pending', client_id)
+                raise
+            self.vault.put('control_done', client_id, result)
+            self.vault.delete('control_pending', client_id)
+            return result
+
+    def recall(self, data):
+        message = self.vault.message(self.me['id'], data.get('client_id'))
+        if not message or message['id'] != data.get('id'):
+            raise SecurityError('只能撤回自己发送的消息。')
+        if message.get('recalled'):
+            return message
+        target = {'id': message['id'], 'client_id': message['client_id']}
+        cid = message['conversation_id']
+        control_id = 'recall-' + str(message['id'])
+        directory, changed = [], []
+        if not self.vault.get('control_pending', control_id) and not self.vault.get('control_done', control_id):
+            directory, changed, _ = self.directory(cid, recall=target)
+            if changed:
+                raise SecurityError('设备发生变化，请先核对安全指纹。')
+        clear = {'type': 'recall', 'created_at': message['created_at'], 'sender': message['sender']}
+        self.control_send(cid, control_id, clear, directory, recall_of=target)
+        return self.vault.recall(target, message['sender'], cid, message['created_at'])
+
+    def sync_tick(self):
+        if time.monotonic() - self.sync_time < 25:
+            return
+        self.sync_time = time.monotonic()
+        cid = 'sync:' + self.me['id']
+        directory, changed, _ = self.directory(cid)
+        if changed:
+            return
+        for peer in directory:
+            did = peer['device_id']
+            if did == self.device_id:
+                continue
+            progress = self.vault.get('sync_progress', did, {'after': 0, 'done': False})
+            if not progress['done']:
+                clear = {'type': 'sync_request', 'after': progress['after'], 'until': progress.get('until')}
+                targets = [d for d in directory if d['device_id'] in (did, self.device_id)]
+                self.control_send(cid, 'sync-' + secrets.token_hex(16), clear, targets, sync_to=did)
+
+    def sync_control(self, packet, clear, directory):
+        if packet['sender_id'] != self.me['id'] or packet.get('sync_to') != self.device_id or packet['conversation_id'] != 'sync:' + self.me['id']:
+            raise SecurityError('设备同步身份不正确。')
+        peer = packet['device_id']
+        if clear.get('type') == 'sync_request':
+            after = clear.get('after')
+            if type(after) is not int or after < 0:
+                raise SecurityError('同步进度无效。')
+            until = clear.get('until')
+            if until is not None and (type(until) is not int or until < after or until > 9223372036854775807):
+                raise SecurityError('同步范围无效。')
+            with self.vault.lock, self.vault.db() as db:
+                if until is None:
+                    until = db.execute('SELECT COALESCE(MAX(id),0) FROM history').fetchone()[0]
+                rows = list(db.execute('''SELECT id,value FROM
+                    (SELECT id,value,ROW_NUMBER() OVER(PARTITION BY cid ORDER BY id DESC) AS position FROM history WHERE id<=?)
+                    WHERE position<=50 AND id>? ORDER BY id LIMIT 8''', (until, after)))
+            entries, size = [], 0
+            for mid, raw in rows:
+                message = self.vault.unpack('message', mid, raw)
+                entry = {'message': message}
+                if message.get('image'):
+                    entry['image'] = self.vault.get('image', message['image'].rsplit('/', 1)[-1])
+                if message.get('attachment'):
+                    entry['attachment'] = self.vault.get('file', message['attachment']['url'].rsplit('/', 1)[-1])
+                length = len(canonical(entry))
+                if entries and size + length > 28 * 1024 * 1024:
+                    break
+                entries.append(entry)
+                size += length
+            response = {'type': 'sync_batch', 'after': after, 'until': until, 'entries': entries,
+                        'done': len(entries) < 8 and len(entries) == len(rows)}
+            targets = [d for d in directory if d['device_id'] in (peer, self.device_id)]
+            self.control_send(packet['conversation_id'], 'batch-' + hashlib.sha256(packet['client_id'].encode()).hexdigest(), response, targets, sync_to=peer)
+            return []
+        if clear.get('type') != 'sync_batch' or not isinstance(clear.get('entries'), list) or len(clear['entries']) > 8:
+            raise SecurityError('同步内容无效。')
+        progress = self.vault.get('sync_progress', peer, {'after': 0, 'done': False})
+        if type(clear.get('after')) is not int or clear['after'] > progress['after']:
+            raise SecurityError('同步进度不连续。')
+        until = clear.get('until')
+        if progress.get('until') is not None and progress['until'] != until and clear['after'] <= progress['after']:
+            # A retried initial request can race the first accepted snapshot.
+            return []
+        if type(until) is not int or until < clear['after'] or until > 9223372036854775807 or (progress.get('until') is not None and progress['until'] != until):
+            raise SecurityError('同步范围不连续。')
+        result, cursor = [], clear['after']
+        for entry in clear['entries']:
+            message = entry['message']
+            if type(message.get('id')) is not int or not cursor < message['id'] <= until or not isinstance(message.get('conversation_id'), str) or message['conversation_id'].startswith('sync:'):
+                raise SecurityError('同步记录编号无效。')
+            cursor = message['id']
+            old = self.vault.message(message['sender']['id'], message['client_id'])
+            if message.get('recalled'):
+                stored = self.vault.recall({'id': message['id'], 'client_id': message['client_id']}, message['sender'], message['conversation_id'], message['created_at'])
+                result.append({**stored, 'history_sync': True})
+            elif not old:
+                with self.vault.lock:
+                    if self.vault.message(message['sender']['id'], message['client_id']):
+                        continue
+                    stored = self.store_clear(message['id'], message['conversation_id'], message['client_id'],
+                                              {'body': message['body'], 'sender': message['sender'], 'created_at': message['created_at'],
+                                               'image': entry.get('image'), 'attachment': entry.get('attachment')})
+                    saved = self.vault.save_message(stored)
+                if saved:
+                    result.append({**stored, 'history_sync': True})
+                    cid = stored['conversation_id']
+                    self.vault.put('read', cid, max(self.vault.get('read', cid, 0), stored['id']))
+        if cursor >= progress['after']:
+            self.vault.put('sync_progress', peer, {'after': cursor, 'until': until, 'done': bool(clear.get('done'))})
+        self.sync_time = 0
+        return result
+
+    def store_clear(self, mid, cid, client_id, clear):
+        if not isinstance(clear['body'], str) or len(clear['body']) > 2000:
+            raise SecurityError('消息正文无效。')
+        image_url, attachment = None, None
+        asset_id = hashlib.sha256((clear['sender']['id'] + ':' + client_id).encode()).hexdigest()
+        if clear.get('image'):
+            self.vault.put('image', asset_id, validate_image(clear['image']))
+            image_url = '/local-images/' + asset_id
+        if clear.get('attachment'):
+            file = validate_file(clear['attachment'])
+            self.vault.put('file', asset_id, file)
+            attachment = {k: v for k, v in file.items() if k != 'data'}
+            attachment['url'] = '/local-files/' + asset_id
+        message = {'id': mid, 'client_id': client_id, 'conversation_id': cid, 'body': clear['body'],
+                   'sender': clear['sender'], 'created_at': clear['created_at'], 'image': image_url, 'encrypted': True}
+        if attachment:
+            message['attachment'] = attachment
+        return message
 
     def send(self, data):
         with self.lock:
@@ -387,6 +573,11 @@ class SecureClient:
                 result.extend(messages)
                 if count < 12:
                     break
+            try:
+                self.sync_tick()
+            except RemoteError as error:
+                if error.status not in (403, 404, 503):
+                    raise
             return result
 
     def _receive_page(self, after, cache):
@@ -396,6 +587,9 @@ class SecureClient:
                 packet = item["envelope"]
                 cid = packet["conversation_id"]
                 try:
+                    if self.vault.get('control_seen', str(item['id'])):
+                        self.remote('/api/received', {'device_id': self.device_id, 'id': item['id']})
+                        continue
                     old = self.vault.message(packet["sender_id"], packet["client_id"])
                     if old:
                         self.remote("/api/received", {"device_id": self.device_id, "id": item["id"]})
@@ -412,25 +606,29 @@ class SecureClient:
                     VerifyKey(unb64(sender_device["sign_key"])).verify(DOMAIN + canonical(signed), unb64(packet["signature"]))
                     key = SealedBox(self.private).decrypt(unb64(packet["keys"][self.device_id]))
                     clear = json.loads(SecretBox(key).decrypt(unb64(packet["ciphertext"])))
+                    if 'sync_to' in packet:
+                        result.extend(self.sync_control(packet, clear, directory))
+                        self.vault.put('control_seen', str(item['id']), True)
+                        self.remote('/api/received', {'device_id': self.device_id, 'id': item['id']})
+                        continue
+                    if 'recall_of' in packet:
+                        if clear.get('type') != 'recall' or clear['sender']['id'] != packet['sender_id']:
+                            raise SecurityError('撤回消息签名身份无效。')
+                        message = self.vault.recall(packet['recall_of'], clear['sender'], cid, clear['created_at'])
+                        self.vault.put('control_seen', str(item['id']), True)
+                        result.append(message)
+                        self.remote('/api/received', {'device_id': self.device_id, 'id': item['id']})
+                        continue
                     if clear["sender"]["id"] != packet["sender_id"] or not isinstance(clear["body"], str) or len(clear["body"]) > 2000:
                         raise SecurityError("消息身份校验失败。")
-                    image_url = None
-                    if clear.get("image"):
-                        image_id = hashlib.sha256((packet["sender_id"] + ":" + packet["client_id"]).encode()).hexdigest()
-                        self.vault.put("image", image_id, validate_image(clear["image"]))
-                        image_url = "/local-images/" + image_id
-                    attachment = None
-                    if clear.get('attachment'):
-                        file_id = hashlib.sha256((packet['sender_id'] + ':' + packet['client_id']).encode()).hexdigest()
-                        file = validate_file(clear['attachment'])
-                        self.vault.put('file', file_id, file)
-                        attachment = {k: v for k, v in file.items() if k != 'data'}
-                        attachment['url'] = '/local-files/' + file_id
-                    message = {"id": item["id"], "client_id": packet["client_id"], "conversation_id": cid, "body": clear["body"], "sender": clear["sender"],
-                               "created_at": clear["created_at"], "image": image_url, "encrypted": True}
-                    if attachment:
-                        message['attachment'] = attachment
-                    if self.vault.save_message(message):
+                    with self.vault.lock:
+                        # Recall may have committed after the first duplicate check.
+                        if self.vault.message(packet['sender_id'], packet['client_id']):
+                            self.remote('/api/received', {'device_id': self.device_id, 'id': item['id']})
+                            continue
+                        message = self.store_clear(item['id'], cid, packet['client_id'], clear)
+                        saved = self.vault.save_message(message)
+                    if saved:
                         result.append(message)
                         callback = getattr(self, 'on_received', None)
                         if callback:

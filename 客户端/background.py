@@ -41,7 +41,7 @@ class BackgroundAgent:
 
     def received(self, context, message):
         with self.lock:
-            if self.active is not context or message['sender']['id'] == context.me['id']:
+            if self.active is not context or message['sender']['id'] == context.me['id'] or message.get('recalled') or message.get('history_sync'):
                 return
         if not self.enabled() or message['conversation_id'] in context.vault.get('ui', 'muted', []):
             return

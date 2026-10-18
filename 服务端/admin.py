@@ -3,6 +3,7 @@ import hmac
 import errno
 import http.cookies
 import json
+import os
 from pathlib import Path
 import secrets
 import sys
@@ -13,6 +14,27 @@ from urllib.parse import parse_qs, urlsplit
 import webbrowser
 from update import Updater
 from listening import listen_address, listen_port, connection_addresses
+from release_config import VERSION
+
+
+def write_access_file(path, url):
+    """Publish the one-process capability atomically, without journal leakage."""
+    path = Path(path)
+    temporary = path.with_name(path.name + '.' + secrets.token_hex(8))
+    try:
+        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as stream:
+            stream.write(url)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def remove_access_file(path, url):
+    try:
+        if Path(path).read_text('utf-8') == url:
+            Path(path).unlink()
+    except FileNotFoundError:
+        pass
 
 
 class Controller:
@@ -71,7 +93,7 @@ class Controller:
         online = {s["device_id"] for s in sessions}
         for device in devices:
             device["online"] = device["id"] in online
-        return {"running": bool(self.server), "host": self.host, "port": self.port, "uptime": int(time.time() - self.started) if self.started else 0,
+        return {"version": VERSION, "running": bool(self.server), "host": self.host, "port": self.port, "uptime": int(time.time() - self.started) if self.started else 0,
                 "error": self.error or getattr(self.server, "last_error", ""), "accounts": accounts, "devices": devices, "sessions": sessions,
                 "online": len({s["user_id"] for s in sessions}), "queued": total, "queue_bytes": size, "settings": settings, "privacy": privacy,
                 "addresses": connection_addresses(self.host, self.port), "data_dir": str(self.core.DATA)}
@@ -207,10 +229,14 @@ def launch(core, args):
     admin.public = Path(__file__).resolve().parent / "admin_ui"
     admin.updater = Updater('server', core.DATA, controller.stop)
     url = f"http://127.0.0.1:{admin.server_port}/?token={admin.token}"
+    access_file = getattr(args, 'admin_url_file', None)
     threading.Thread(target=admin.serve_forever, daemon=True).start()
     try:
+        if access_file:
+            write_access_file(access_file, url)
         if args.browser:
-            print("Admin: " + url, flush=True)
+            if not access_file:
+                print("Admin: " + url, flush=True)
             if not args.no_open:
                 webbrowser.open(url)
             while True:
@@ -225,6 +251,8 @@ def launch(core, args):
     except KeyboardInterrupt:
         pass
     finally:
+        if access_file:
+            remove_access_file(access_file, url)
         controller.stop()
         admin.shutdown()
         admin.server_close()

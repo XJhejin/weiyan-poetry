@@ -163,6 +163,8 @@ class Gateway(BaseHTTPRequestHandler):
                     data = self.read_json()
                     if data.get('action') == 'settings':
                         activity.openBackgroundSettings()
+                    elif data.get('action') == 'notification-settings':
+                        service.openMessageSettings()
                     elif isinstance(data.get('enabled'), bool):
                         service.setEnabled(data['enabled'])
                     else:
@@ -204,7 +206,7 @@ class Gateway(BaseHTTPRequestHandler):
                 if origin and origin != f"http://127.0.0.1:{self.server.server_port}":
                     return self.json_response({"error": "请求来源不正确。"}, 403)
                 return self.websocket_proxy()
-            if path == "/api/bootstrap" or path.startswith(("/desktop/security", "/desktop/storage", "/local-images/", "/local-files/")) or path in ("/api/messages", "/api/upload", "/api/attachments", "/api/search", "/api/read") or re.fullmatch(r"/api/conversations/[^/]+/messages", path):
+            if path == "/api/bootstrap" or path.startswith(("/desktop/security", "/desktop/storage", "/local-images/", "/local-files/")) or path in ("/api/messages", "/api/recall", "/api/upload", "/api/attachments", "/api/search", "/api/read") or re.fullmatch(r"/api/conversations/[^/]+/messages", path):
                 return self.secure_api(path)
             if path.startswith(("/api/", "/uploads/")):
                 return self.proxy()
@@ -377,6 +379,8 @@ class Gateway(BaseHTTPRequestHandler):
             return
         if path == "/api/messages":
             return self.json_response({"message": context.send(payload)}, 201)
+        if path == '/api/recall':
+            return self.json_response({'message': context.recall(payload)})
         if path == "/api/read":
             cid, last = payload.get("conversation_id"), payload.get("last_id")
             if not isinstance(cid, str) or not isinstance(last, int):
