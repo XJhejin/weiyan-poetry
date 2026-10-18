@@ -144,6 +144,13 @@ class Gateway(BaseHTTPRequestHandler):
                         from java import jclass
                         jclass('com.weiyan.poetry.MainActivity').requestNotifications()
                 return self.json_response({'enabled': CONFIG.get('native_notifications', True), 'native': bool(getattr(self.server, 'background', None)), 'platform': os.environ.get('WEIYAN_PLATFORM', 'windows')})
+            if path == '/desktop/tray-settings' and self.command == 'POST':
+                self.read_json()
+                if sys.platform != 'win32' or getattr(self.server, 'browser_mode', False):
+                    return self.json_response({'error': '请在 Windows 客户端中设置托盘图标。'}, 400)
+                # Windows owns icon promotion; open its supported settings page.
+                os.startfile('ms-settings:taskbar')
+                return self.json_response({'ok': True})
             if path.startswith('/desktop/update/'):
                 operation = path.rsplit('/', 1)[-1]
                 if self.command == 'POST':

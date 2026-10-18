@@ -151,7 +151,16 @@ class Vault:
                     if os.name == 'nt':
                         os.rename(temporary, key_file)
                     else:
-                        os.link(temporary, key_file)
+                        # Android SELinux denies hard links in app storage.
+                        # Serialize creators, then atomically publish a sealed
+                        # key; never replace a key another process has created.
+                        import fcntl
+                        with key_file.with_suffix('.lock').open('a+b') as guard:
+                            fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+                            if key_file.exists():
+                                key = protect(key_file.read_bytes(), decrypt=True)
+                            else:
+                                os.replace(temporary, key_file)
                 except FileExistsError:
                     key = protect(key_file.read_bytes(), decrypt=True)
             finally:

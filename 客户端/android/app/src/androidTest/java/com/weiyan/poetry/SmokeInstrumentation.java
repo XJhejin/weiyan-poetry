@@ -39,7 +39,7 @@ public class SmokeInstrumentation extends Instrumentation {
             js(web,"fetch('/desktop/config').then(r=>r.json()).then(c=>{window.defaultCorrect=c.server_url==='http://113.219.237.106:23074';return post('/desktop/config',{server_url:'"+base+"'});}).then(()=>{window.configured=true;})");
             waitJs(web,"window.configured===true");
             if(!"true".equals(js(web,"window.defaultCorrect")))throw new AssertionError("Wrong released server default");
-            js(web,"post('/api/register',{username:'android_ui_'+Date.now(),password:'Android-test-only-2288',nickname:'界面验证'}).then(()=>bootstrap({initial:true})).then(()=>{connectEvents();window.loggedIn=true;}).catch(e=>{window.uiError=e.message})");
+            js(web,"post('/api/register',{username:'android_ui_'+Date.now(),password:'Android-test-only-2288',nickname:'界面验证'}).then(()=>{window.uiStage='registered';return bootstrap({initial:true});}).then(()=>{connectEvents();window.loggedIn=true;}).catch(e=>{window.uiError=e.message})");
             waitJs(web,"window.loggedIn===true");
             if(!"true".equals(js(web,"state.conversations.filter(c=>c.kind==='room').length===1 && state.conversations.find(c=>c.kind==='room').name==='-扉页-'")))throw new AssertionError("Room migration failed");
             js(web,"openCreateGroup();document.querySelector('#new-group-name').value='手机群聊';document.querySelector('#create-group-form button[type=submit]').click();");

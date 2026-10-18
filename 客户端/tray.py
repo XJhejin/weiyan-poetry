@@ -1,9 +1,8 @@
 """Windows tray lifecycle and privacy-preserving native balloon notifications."""
 import ctypes
 import os
-from pathlib import Path
 import threading
-from PIL import Image, ImageDraw
+from PIL import Image
 import pystray
 from window_effects import WindowEffects
 
@@ -16,10 +15,10 @@ class Tray:
         self.stopped = threading.Event()
         self.effects = WindowEffects(window)
         self.image = Image.open(icon).convert('RGBA')
-        self.badge = self.image.copy()
-        draw = ImageDraw.Draw(self.badge)
-        size = self.badge.width
-        draw.ellipse((size*.61, size*.02, size*.98, size*.39), fill='#cf7294', outline='#fff8fa', width=max(1,size//50))
+        # Keep the notification-area slot registered and clickable in both frames.
+        # Toggling Icon.visible would remove/reinsert it and disturb its position.
+        self.blank = Image.new('RGBA', self.image.size, (0, 0, 0, 0))
+        self.bright = True
         self.icon = pystray.Icon('WeiyanPoetry', self.image, '未言诗集', menu=pystray.Menu(
             pystray.MenuItem('打开未言诗集', self.show, default=True),
             pystray.MenuItem('新消息提醒', self.toggle, checked=lambda item: self.config.get('native_notifications', True)),
@@ -51,18 +50,19 @@ class Tray:
     def clear_unread(self):
         with self.lock:
             self.unread = 0
+            self.bright = True
             self.icon.icon = self.image
             self.icon.title = '未言诗集'
 
     def pulse(self):
-        bright = False
         while not self.stopped.wait(.6):
-            if self.unread:
-                if self.foreground():
-                    self.clear_unread()
-                else:
-                    bright = not bright
-                    self.icon.icon = self.badge if bright else self.image
+            with self.lock:
+                if self.unread:
+                    if self.foreground():
+                        self.clear_unread()
+                    else:
+                        self.bright = not self.bright
+                        self.icon.icon = self.image if self.bright else self.blank
 
     def toggle(self, *args):
         self.save_config(not self.config.get('native_notifications', True))
@@ -73,7 +73,8 @@ class Tray:
             return
         with self.lock:
             self.unread += 1
-            self.icon.icon = self.badge
+            self.bright = True
+            self.icon.icon = self.image
             preview = message.get('body', '').strip()
             if not preview:
                 file = message.get('attachment')

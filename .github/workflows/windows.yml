@@ -26,6 +26,8 @@ jobs:
         run: python 服务端/tests/test_chat.py
       - name: Test administration, migration and signed updates
         run: python 服务端/tests/test_privacy_tools.py
+      - name: Test whole-logo tray animation and unread lifecycle
+        run: python 客户端/tests/test_tray.py
       - name: Build independent Windows programs
         run: python 客户端/tools/build.py
       - name: Test actual executables
