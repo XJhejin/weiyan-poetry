@@ -32,10 +32,19 @@ jobs:
         env:
           WEIYAN_TEST_BINARIES: '1'
         run: python 服务端/tests/test_chat.py
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build Windows client MSI
+        run: |
+          dotnet tool install --tool-path .build/wix wix --version 5.0.2
+          .build/wix/wix.exe extension add -g WixToolset.UI.wixext/5.0.2
+          python 客户端/tools/build_msi.py --wix .build/wix/wix.exe
       - uses: actions/upload-artifact@v4
         with:
           name: weiyan-windows-unsigned
           path: |
             build-output/未言诗集/
             build-output/未言诗集服务端/
+            build-output/*.msi
           retention-days: 7

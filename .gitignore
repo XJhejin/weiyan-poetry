@@ -18,3 +18,14 @@ _internal/
 **/webview/
 **/secure/
 **/sessions/
+*.msi
+*.dmg
+*.apk
+*.aab
+*.jks
+*.keystore
+*.idsig
+*.wixpdb
+**/.gradle/
+**/build/
+**/local.properties

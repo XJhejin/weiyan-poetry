@@ -82,6 +82,16 @@ class Updater:
         self.lock = threading.Lock()
         self.progress = {"stage": "idle", "message": "", "percent": 0}
 
+    @property
+    def package_key(self):
+        if os.environ.get('WEIYAN_PLATFORM') == 'android':
+            return 'client_android'
+        if sys.platform == 'darwin':
+            return 'server_macos_arm64'
+        if self.kind == 'client' and (Path(sys.executable).parent / '.install-msi').is_file():
+            return 'client_windows_msi'
+        return self.kind
+
     def info(self):
         return {"current": VERSION, "repository": REPOSITORY, "source": "GitHub Releases", "signed": True}
 
@@ -119,7 +129,7 @@ class Updater:
         signed = verify_manifest(manifest)
         if release.get("tag_name") != "v" + signed["version"]:
             raise ValueError("版本标签与签名清单不一致。")
-        artifact = signed["assets"].get(self.kind)
+        artifact = signed["assets"].get(self.package_key)
         if not isinstance(artifact, dict) or not re.fullmatch(r"[0-9a-f]{64}", artifact.get("sha256", "")) or not isinstance(artifact.get("bytes"), int) or not 0 < artifact["bytes"] <= MAX_DOWNLOAD:
             raise ValueError("更新文件校验信息无效。")
         asset = assets.get(artifact["name"])
@@ -131,7 +141,7 @@ class Updater:
                 "message": "发现新版本，可下载并安装。" if available else "当前已是最新正式版本。"}
 
     def install(self):
-        if not getattr(sys, "frozen", False):
+        if not getattr(sys, "frozen", False) and os.environ.get('WEIYAN_PLATFORM') != 'android':
             raise ValueError("源码预览支持检查更新；请在打包后的桌面软件中安装更新。")
         with self.lock:
             if self.progress["stage"] in ("downloading", "verifying", "installing"):
@@ -152,7 +162,8 @@ class Updater:
             if not url.startswith("https://api.github.com/repos/" + REPOSITORY + "/releases/assets/"):
                 raise ValueError("更新文件来源与项目不一致。")
             req = urllib.request.Request(url, headers={"User-Agent": "WeiyanPoetry/" + VERSION, 'Accept': 'application/octet-stream', 'X-GitHub-Api-Version': '2022-11-28'})
-            archive, digest, size = folder / "package.zip", hashlib.sha256(), 0
+            extension = {'client_android': '.apk', 'client_windows_msi': '.msi', 'server_macos_arm64': '.dmg'}.get(self.package_key, '.zip')
+            archive, digest, size = folder / ('package' + extension), hashlib.sha256(), 0
             with urllib.request.urlopen(req, timeout=30) as response, archive.open("xb") as file:
                 while True:
                     chunk = response.read(128 * 1024)
@@ -167,13 +178,21 @@ class Updater:
             self.progress = {"stage": "verifying", "percent": 100, "message": "正在校验更新包…"}
             if size != artifact["bytes"] or digest.hexdigest() != artifact["sha256"]:
                 raise ValueError("更新包完整性校验失败，已阻止安装。")
-            validate_archive(archive, self.kind)
+            if self.package_key == 'client_android':
+                from mobile import install_apk
+                install_apk(archive)
+                self.progress = {'stage': 'installing', 'percent': 100, 'message': '签名与文件完整性验证通过，请在安卓系统中确认安装。'}
+                return
+            if self.package_key == 'server_macos_arm64':
+                return self._install_macos(archive, folder)
+            if self.package_key != 'client_windows_msi':
+                validate_archive(archive, self.kind)
             helper = Path(__file__).resolve().parent / "update_helper.exe"
             if not helper.is_file():
                 raise ValueError("缺少更新辅助程序，请重新下载完整软件。")
             shutil.copy2(helper, folder / "install.exe")
             target = Path(sys.executable).resolve().parent
-            job = {"kind": self.kind, "manifest": self.release["manifest"], "target": str(target), "parent_pid": os.getpid(), "archive": str(archive)}
+            job = {"kind": self.kind, "package_key": self.package_key, "manifest": self.release["manifest"], "target": str(target), "parent_pid": os.getpid(), "archive": str(archive)}
             (folder / "job.json").write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
             subprocess.Popen([str(folder / "install.exe"), str(folder / "job.json")], creationflags=subprocess.CREATE_NO_WINDOW, cwd=str(folder))
             self.progress = {"stage": "installing", "percent": 100, "message": "验证通过，正在重启安装…"}
@@ -185,6 +204,53 @@ class Updater:
             self.progress = {"stage": "error", "percent": 0, "message": str(error) or "更新未完成，原程序可继续使用。"}
 
 
+
+    def _install_macos(self, archive, folder):
+        """Stage the verified bundle; replace it after the old process exits."""
+        bundle = next((p for p in Path(sys.executable).resolve().parents if p.suffix == '.app'), None)
+        if bundle is None or bundle.name != '未言诗集服务端.app' or not os.access(bundle.parent, os.W_OK):
+            raise ValueError('请先将服务端拖入可写的 Applications 文件夹，再安装更新。')
+        mount = folder / 'volume'
+        mount.mkdir()
+        subprocess.run(['/usr/bin/hdiutil', 'attach', '-readonly', '-nobrowse', '-mountpoint', str(mount), str(archive)], check=True, capture_output=True, timeout=90)
+        fresh = folder / bundle.name
+        try:
+            source = mount / bundle.name
+            if not source.is_dir() or source.is_symlink():
+                raise ValueError('更新镜像中缺少服务端应用。')
+            subprocess.run(['/usr/bin/ditto', str(source), str(fresh)], check=True, capture_output=True, timeout=120)
+            subprocess.run(['/usr/bin/codesign', '--verify', '--deep', '--strict', str(fresh)], check=True, capture_output=True, timeout=60)
+        finally:
+            subprocess.run(['/usr/bin/hdiutil', 'detach', str(mount)], capture_output=True, timeout=30)
+        script = folder / 'install.sh'
+        script.write_text('''#!/bin/sh
+set -eu
+parent="$1"; fresh="$2"; target="$3"; backup="$4"; result="$5"
+count=0
+while kill -0 "$parent" 2>/dev/null; do
+  count=$((count+1))
+  if [ "$count" -gt 90 ]; then echo '旧程序未退出，更新已取消。' > "$result"; exit 1; fi
+  sleep 1
+done
+if ! mv "$target" "$backup"; then echo '无法备份原应用。' > "$result"; exit 1; fi
+if /usr/bin/ditto "$fresh" "$target" && /usr/bin/codesign --verify --deep --strict "$target" && /usr/bin/open -n "$target"; then
+  echo '更新成功' > "$result"
+else
+  if [ -d "$target" ]; then mv "$target" "${backup}.failed"; fi
+  mv "$backup" "$target"
+  /usr/bin/open -n "$target"
+  echo '更新失败，已恢复原应用。' > "$result"
+  exit 1
+fi
+''', encoding='utf-8')
+        subprocess.Popen(['/bin/sh', str(script), str(os.getpid()), str(fresh), str(bundle), str(bundle.parent / (bundle.name + '.backup-' + secrets.token_hex(6))), str(folder / 'result.txt')], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.progress = {'stage': 'installing', 'percent': 100, 'message': '验证通过，正在重启安装…'}
+        time.sleep(1.5)
+        if self.before_exit:
+            self.before_exit()
+        os._exit(0)
+
+
 def apply_update(job_path):
     """Runs in a copied standalone helper after the old app has exited."""
     folder = Path(job_path).resolve().parent
@@ -194,10 +260,14 @@ def apply_update(job_path):
     if archive.parent != folder or target == target.parent or not target.is_dir() or target.is_symlink():
         raise ValueError("安装目录无效。")
     signed = verify_manifest(job["manifest"])
-    artifact = signed["assets"][job["kind"]]
+    package_key = job.get('package_key', job['kind'])
+    artifact = signed["assets"][package_key]
     if archive.stat().st_size != artifact["bytes"] or hashlib.sha256(archive.read_bytes()).hexdigest() != artifact["sha256"]:
         raise ValueError("安装前复核失败。")
-    root, entry = validate_archive(archive, job["kind"])
+    if package_key == 'client_windows_msi':
+        root, entry = None, '未言诗集.exe'
+    else:
+        root, entry = validate_archive(archive, job["kind"])
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
     kernel.OpenProcess.restype = ctypes.c_void_p
@@ -211,6 +281,13 @@ def apply_update(job_path):
         finally:
             kernel.CloseHandle(handle)
     unpacked, backup = folder / "unpacked", folder / "backup"
+    if package_key == 'client_windows_msi':
+        code = subprocess.run(['msiexec.exe', '/i', str(archive), '/passive', 'REBOOT=ReallySuppress'], check=False).returncode
+        if code not in (0, 3010):
+            raise ValueError(f'Windows Installer 未完成安装（{code}），原版本与资料已保留。')
+        subprocess.Popen([str(target / entry)], cwd=str(target))
+        (folder / 'result.txt').write_text('更新成功 ' + signed['version'], encoding='utf-8')
+        return
     unpacked.mkdir(exist_ok=True)
     with zipfile.ZipFile(archive) as package:
         package.extractall(unpacked)

@@ -76,6 +76,9 @@ class ChatIntegration(unittest.TestCase):
         cls.env = os.environ.copy()
         cls.env["WEIYAN_DATA_DIR"] = str(Path(cls.temp.name) / "server")
         cls.env["WEIYAN_CLIENT_DATA"] = str(Path(cls.temp.name) / "client")
+        if os.environ.get('WEIYAN_TEST_PORTABLE'):
+            cls.env['PYTHONPATH'] = str(ROOT / '服务端/tests/fixtures') + os.pathsep + str(ROOT / '客户端')
+            cls.env['WEIYAN_TEST_KEY'] = base64.b64encode(os.urandom(32)).decode()
         cls.server_port, cls.client_port, cls.second_port = free_port(), free_port(), free_port()
         cls.server_base = f"http://127.0.0.1:{cls.server_port}"
         cls.client_base = f"http://127.0.0.1:{cls.client_port}"
@@ -93,6 +96,8 @@ class ChatIntegration(unittest.TestCase):
     @classmethod
     def start_server(cls):
         entry=[str(ROOT/'服务端'/'未言诗集服务端.exe')] if os.environ.get('WEIYAN_TEST_BINARIES') else [sys.executable,str(ROOT/'服务端'/'server.py')]
+        if os.environ.get('WEIYAN_SERVER_EXECUTABLE'):
+            entry=[os.environ['WEIYAN_SERVER_EXECUTABLE']]
         process=subprocess.Popen(entry+['--headless','--host','127.0.0.1','--port',str(cls.server_port)],env=cls.env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         cls.wait_for(cls.server_base+'/api/health');return process
 
@@ -239,7 +244,7 @@ class ChatIntegration(unittest.TestCase):
         self.assertEqual([m['client_id'] for m in new_history],['new-device-001'])
         self.bob.request('/api/bootstrap')
         # Later room sends also require recognizing this new device for the sender.
-        self.alice.request('/desktop/security?conversation_id=room:inspiration')
+        self.alice.request('/desktop/security?conversation_id=room:lobby')
         type(self).new_bob=bob_new
 
     def test_06_local_pagination_server_and_client_restart_offline_history(self):
@@ -290,6 +295,74 @@ class ChatIntegration(unittest.TestCase):
         history=self.bob.request('/api/conversations/'+self.cid+'/messages')['messages']
         message=next(m for m in history if m['client_id']=='image-boundary')
         self.assertEqual(self.bob.request(message['image']),raw)
+
+    def test_09_friend_consent_and_stranger_messaging(self):
+        self.assertEqual(self.alice.request('/api/users?q=@BOB_TEST')['users'][0]['id'],self.bob_id)
+        self.assertEqual(self.alice.request('/api/users?q='+urllib.parse.quote('乙'))['users'][0]['id'],self.bob_id)
+        self.assertFalse(self.alice.request('/api/bootstrap')['contacts'])
+        self.alice.request('/api/friends',dict(action='request',user_id=self.bob_id))
+        self.assertFalse(self.alice.request('/api/bootstrap')['contacts'])
+        request=self.bob.request('/api/bootstrap')['friend_requests'][0]
+        self.eve.request('/api/friends',dict(action='accept',request_id=request['id']),expected=404)
+        self.bob.request('/api/friends',dict(action='decline',request_id=request['id']))
+        self.assertFalse(self.alice.request('/api/bootstrap')['contacts'])
+        self.send('Stranger messaging is allowed','stranger-message')
+        self.alice.request('/api/friends',dict(action='request',user_id=self.bob_id))
+        request=self.bob.request('/api/bootstrap')['friend_requests'][0]
+        self.bob.request('/api/friends',dict(action='accept',request_id=request['id']))
+        self.assertEqual(self.alice.request('/api/bootstrap')['contacts'][0]['id'],self.bob_id)
+        self.assertEqual(self.bob.request('/api/bootstrap')['contacts'][0]['id'],self.alice_id)
+
+    def test_10_group_invites_roles_and_recipient_removal(self):
+        rooms=[c for c in self.alice.request('/api/bootstrap')['conversations'] if c['kind']=='room']
+        self.assertEqual([(r['id'],r['name']) for r in rooms],[('room:lobby','-扉页-')])
+        cid=self.alice.request('/api/groups',dict(action='create',name='Integration Group'))['conversation_id']
+        for session,uid in ((self.bob,self.bob_id),(self.eve,self.eve.request('/api/bootstrap')['me']['id'])):
+            self.alice.request('/api/groups',dict(action='invite',conversation_id=cid,user_id=uid))
+            session.request('/api/groups?conversation_id='+cid,expected=403)
+            invite=session.request('/api/bootstrap')['group_invites'][0]
+            self.alice.request('/api/groups',dict(action='accept',invitation_id=invite['id']),expected=404)
+            session.request('/api/groups',dict(action='accept',invitation_id=invite['id']))
+        eve_id=self.eve.request('/api/bootstrap')['me']['id']
+        self.eve.request('/api/groups',dict(action='settings',conversation_id=cid,name='Unauthorized'),expected=403)
+        self.alice.request('/api/groups',dict(action='role',conversation_id=cid,user_id=self.bob_id,role='admin'))
+        self.bob.request('/api/groups',dict(action='settings',conversation_id=cid,name='Renamed Group',announcement='Group announcement',avatar='moon',mute_all=True))
+        self.eve.request('/api/messages',dict(conversation_id=cid,body='Muted',client_id='muted-message'),expected=403)
+        self.bob.request('/api/groups',dict(action='kick',conversation_id=cid,user_id=self.alice_id),expected=403)
+        self.bob.request('/api/groups',dict(action='role',conversation_id=cid,user_id=eve_id,role='admin'),expected=403)
+        # An offline removed member loses pending deliveries and access to future recipient keys.
+        msg=self.send('Only group members can decrypt','group-queue',cid=cid)
+        with self.db() as db:
+            eve_device=db.execute('SELECT id FROM devices WHERE user_id=?',(eve_id,)).fetchone()[0]
+            self.assertIsNotNone(db.execute('SELECT 1 FROM deliveries WHERE packet_id=? AND device_id=?',(msg['id'],eve_device)).fetchone())
+        self.bob.request('/api/groups',dict(action='kick',conversation_id=cid,user_id=eve_id))
+        self.eve.request('/api/keys?conversation_id='+cid,expected=403)
+        self.eve.request('/api/messages',dict(conversation_id=cid,body='After kick',client_id='kicked-message'),expected=403)
+        with self.db() as db:self.assertIsNone(db.execute('SELECT 1 FROM deliveries WHERE packet_id=? AND device_id=?',(msg['id'],eve_device)).fetchone())
+        self.assertNotIn(eve_device,{d['device_id'] for d in self.alice.request('/desktop/security?conversation_id='+cid)['devices']})
+        self.alice.request('/api/groups',dict(action='transfer',conversation_id=cid,user_id=self.bob_id))
+        self.alice.request('/api/groups',dict(action='dissolve',conversation_id=cid),expected=403)
+        self.bob.request('/api/groups',dict(action='dissolve',conversation_id=cid))
+        self.assertNotIn(cid,{c['id'] for c in self.alice.request('/api/bootstrap')['conversations']})
+
+    def test_11_encrypted_files_videos_and_range_preview(self):
+        for index,(name,kind,raw) in enumerate((('encrypted-note.txt','file',b'private-file-payload-6296'),('preview.mp4','video',b'\x00\x00\x00\x18ftypmp42'+b'private-video-payload-1558'))):
+            upload=self.alice.request('/api/attachments',dict(name=name,kind=kind,data=base64.b64encode(raw).decode()))
+            sent=self.alice.request('/api/messages',dict(conversation_id=self.cid,body='',file_id=upload['id'],client_id='attachment-'+str(index)),expected=201)['message']
+            self.assertEqual(sent['attachment']['name'],name)
+            with self.db() as db:
+                packet=db.execute('SELECT envelope FROM relay_packets WHERE id=?',(sent['id'],)).fetchone()[0]
+                self.assertNotIn(raw,packet);self.assertNotIn(name.encode(),packet)
+            received=next(m for m in self.bob.request('/api/conversations/'+self.cid+'/messages')['messages'] if m['id']==sent['id'])
+            self.assertEqual(self.bob.request(received['attachment']['url']),raw)
+            request=urllib.request.Request(self.client_base+received['attachment']['url'],headers={'Range':'bytes=4-11'})
+            with self.bob.opener.open(request) as response:
+                self.assertEqual(response.status,206);self.assertEqual(response.read(),raw[4:12]);self.assertIn('bytes 4-11/',response.headers['Content-Range'])
+            self.eve.request(received['attachment']['url'],expected=404)
+            for file in Path(self.env['WEIYAN_CLIENT_DATA']).rglob('*'):
+                if file.is_file() and file.suffix not in ('.log',):self.assertNotIn(raw,file.read_bytes())
+        self.alice.request('/api/attachments',dict(name='../escape.txt',kind='file',data='YQ=='),expected=400)
+        self.alice.request('/api/attachments',dict(name='fake.mp4',kind='video',data='YQ=='),expected=400)
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

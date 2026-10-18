@@ -5,6 +5,7 @@ import json
 import re
 import secrets
 import time
+import groups
 
 from nacl.signing import VerifyKey
 from nacl.exceptions import BadSignatureError
@@ -13,7 +14,7 @@ from nacl.bindings import crypto_scalarmult
 
 DOMAIN = b"WeiyanPoetry/envelope/v2\0"
 DEVICE_DOMAIN = b"WeiyanPoetry/device/v2\0"
-MAX_PACKET = 12 * 1024 * 1024
+MAX_PACKET = 48 * 1024 * 1024
 
 
 def canonical(value):
@@ -146,6 +147,7 @@ def relay(db, uid, payload, access, error, events):
             raise error("重复消息内容不一致。", 409)
         return {"id": old["id"], "queued": True}
     targets = directory(db, cid)
+    groups.check_speaking(db, cid, uid, error)
     # An old directory may omit newly added devices. Reject rather than send a
     # message that the UI incorrectly describes as available on every device.
     if set(packet["keys"]) != {d["device_id"] for d in targets}:

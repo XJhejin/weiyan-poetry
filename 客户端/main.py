@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import http.client
+import http.cookies
 import json
 import mimetypes
 import os
@@ -11,13 +12,13 @@ import secrets
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit, unquote, parse_qs
+from urllib.parse import urlsplit, unquote, parse_qs, quote
 import webbrowser
 import hashlib
 import base64
 import re
 import time
-from secure import SecureClient, SecurityError, RemoteError, protect
+from secure import SecureClient, SecurityError, RemoteError, protect, validate_file
 from update import Updater
 from release_config import VERSION
 
@@ -26,7 +27,8 @@ PUBLIC = ROOT / "ui"
 PROFILE = Path(os.environ.get("WEIYAN_CLIENT_DATA", str(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "WeiyanPoetry" / "client")))
 CONFIG_FILE = PROFILE / "config.json"
 CONFIG_LOCK = threading.Lock()
-CONFIG = {"server_url": "http://127.0.0.1:8765"}
+DEFAULT_SERVER = "http://113.219.237.106:23074"
+CONFIG = {"server_url": DEFAULT_SERVER}
 
 
 def load_config():
@@ -49,7 +51,7 @@ def save_server(value):
     except ValueError:
         valid = False
     if not valid:
-        raise ValueError("地址示例：http://192.168.1.8:8765")
+        raise ValueError("地址示例：http://113.219.237.106:23074")
     with CONFIG_LOCK:
         CONFIG["server_url"] = value
         temporary = CONFIG_FILE.with_suffix(".tmp")
@@ -63,6 +65,13 @@ class Gateway(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+    def relay_cookie(self):
+        try:
+            cookies = http.cookies.SimpleCookie(self.headers.get('Cookie', ''))
+            return 'weiyan_session=' + cookies['weiyan_session'].value if 'weiyan_session' in cookies else ''
+        except http.cookies.CookieError:
+            return ''
 
     def json_response(self, data, status=200, clear_cookie=False):
         raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -123,7 +132,7 @@ class Gateway(BaseHTTPRequestHandler):
                 if origin and origin != f"http://127.0.0.1:{self.server.server_port}":
                     return self.json_response({"error": "请求来源不正确。"}, 403)
                 return self.websocket_proxy()
-            if path == "/api/bootstrap" or path.startswith(("/desktop/security", "/desktop/storage", "/local-images/")) or path in ("/api/messages", "/api/upload", "/api/search", "/api/read") or re.fullmatch(r"/api/conversations/[^/]+/messages", path):
+            if path == "/api/bootstrap" or path.startswith(("/desktop/security", "/desktop/storage", "/local-images/", "/local-files/")) or path in ("/api/messages", "/api/upload", "/api/attachments", "/api/search", "/api/read") or re.fullmatch(r"/api/conversations/[^/]+/messages", path):
                 return self.secure_api(path)
             if path.startswith(("/api/", "/uploads/")):
                 return self.proxy()
@@ -153,7 +162,7 @@ class Gateway(BaseHTTPRequestHandler):
             pass
 
     def context(self):
-        cookie = self.headers.get("Cookie", "")
+        cookie = self.relay_cookie()
         server_url = CONFIG["server_url"]
         key = hashlib.sha256((server_url + cookie).encode()).hexdigest()
         cache = PROFILE / 'sessions' / (key + '.dpapi')
@@ -187,7 +196,7 @@ class Gateway(BaseHTTPRequestHandler):
 
     def read_json(self):
         length = int(self.headers.get("Content-Length", "0"))
-        if length < 0 or length > 8 * 1024 * 1024:
+        if length < 0 or length > 32 * 1024 * 1024:
             raise ValueError("请求太大。")
         result = json.loads(self.rfile.read(length))
         if not isinstance(result, dict):
@@ -213,6 +222,48 @@ class Gateway(BaseHTTPRequestHandler):
             return self.json_response({"ok": True})
         if path == "/api/search":
             return self.json_response({"messages": context.vault.messages(search=params.get("q", [""])[0][:100], limit=50)})
+        if path == '/api/attachments':
+            file = validate_file(payload)
+            file_id = secrets.token_hex(20)
+            context.vault.put('file', file_id, file)
+            return self.json_response({k: v for k, v in file.items() if k != 'data'} | {'id': file_id, 'url': '/local-files/' + file_id})
+        if path.startswith('/local-files/'):
+            file = context.vault.get('file', path.rsplit('/', 1)[-1])
+            if not file:
+                return self.json_response({'error': '文件不存在。'}, 404)
+            raw = base64.b64decode(file['data'], validate=True)
+            start, end = 0, len(raw) - 1
+            requested = self.headers.get('Range')
+            status = 200
+            if requested:
+                match = re.fullmatch(r'bytes=(\d*)-(\d*)', requested)
+                if not match or not any(match.groups()):
+                    return self.json_response({'error': '文件范围无效。'}, 416)
+                if not match[1]:
+                    start = max(0, len(raw) - int(match[2]))
+                else:
+                    start = int(match[1])
+                    end = min(end, int(match[2])) if match[2] else end
+                if start > end or start >= len(raw):
+                    self.send_response(416)
+                    self.send_header('Content-Range', f'bytes */{len(raw)}')
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
+                status = 206
+            inline = file['kind'] == 'video' and not params.get('download')
+            self.send_response(status)
+            self.send_header('Content-Type', file['mime'] if inline else 'application/octet-stream')
+            self.send_header('Content-Disposition', ('inline' if inline else 'attachment') + "; filename*=UTF-8''" + quote(file['name']))
+            self.send_header('Content-Length', str(max(0, end - start + 1)))
+            self.send_header('Accept-Ranges', 'bytes')
+            if status == 206:
+                self.send_header('Content-Range', f'bytes {start}-{end}/{len(raw)}')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.end_headers()
+            self.wfile.write(raw[start:end + 1])
+            return
         if path == "/api/upload":
             raw = base64.b64decode(payload.get("data", ""), validate=True)
             if len(raw) > 5 * 1024 * 1024:
@@ -277,7 +328,7 @@ class Gateway(BaseHTTPRequestHandler):
         parsed = urlsplit(CONFIG["server_url"])
         cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
         connection = cls(parsed.hostname, parsed.port, timeout=20)
-        headers = {"Host": parsed.netloc, "Origin": CONFIG["server_url"], "X-Weiyan-Client": "web", "Cookie": self.headers.get("Cookie", ""), "Content-Type": "application/json"}
+        headers = {"Host": parsed.netloc, "Origin": CONFIG["server_url"], "X-Weiyan-Client": "web", "Cookie": self.relay_cookie(), "Content-Type": "application/json"}
         try:
             connection.request("POST" if data is not None else "GET", path, body=json.dumps(data, ensure_ascii=False).encode() if data is not None else None, headers=headers)
             response = connection.getresponse()
@@ -301,7 +352,7 @@ class Gateway(BaseHTTPRequestHandler):
         parsed = urlsplit(CONFIG["server_url"])
         try:
             upstream = PortAwareClient.connect(("wss" if parsed.scheme == "https" else "ws") + "://" + parsed.netloc + "/api/socket?device_id=" + context.device_id,
-                                      headers={"Cookie": self.headers.get("Cookie", ""), "Origin": CONFIG["server_url"]},
+                                      headers={"Cookie": self.relay_cookie(), "Origin": CONFIG["server_url"]},
                                       ping_interval=12, max_message_size=65536)
         except (ConnectionError, OSError):
             return self.json_response({"error": "暂时无法连接到服务端。"}, 503)
@@ -365,7 +416,7 @@ class Gateway(BaseHTTPRequestHandler):
         headers = {"Host": parsed.netloc, "Origin": f"{parsed.scheme}://{parsed.netloc}", "X-Weiyan-Client": "web"}
         for name in ("Cookie", "Content-Type", "Last-Event-ID"):
             if self.headers.get(name):
-                headers[name] = self.headers[name]
+                headers[name] = self.relay_cookie() if name == 'Cookie' else self.headers[name]
         try:
             connection.request(self.command, self.path, body=body, headers=headers)
             response = connection.getresponse()
@@ -434,6 +485,7 @@ def main():
         return
     threading.Thread(target=gateway.serve_forever, daemon=True).start()
     import webview
+    webview.settings['ALLOW_DOWNLOADS'] = True
     icon = str(PUBLIC / "assets" / "logo.ico")
     window = webview.create_window("未言诗集", url, width=1360, height=880, min_size=(900, 650),
                                   background_color="#fff8fa", text_select=True)

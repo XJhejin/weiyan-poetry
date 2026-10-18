@@ -214,7 +214,8 @@ def launch(core, args):
         else:
             import webview
             webview.create_window("未言诗集 · 服务端管理", url, width=1250, height=850, min_size=(1020, 700), background_color="#fff8fa", text_select=True)
-            webview.start(gui="edgechromium", private_mode=True, icon=str(admin.public / "logo.ico"))
+            import sys
+            webview.start(gui="cocoa" if sys.platform == 'darwin' else "edgechromium", private_mode=True, icon=str(admin.public / "logo.ico"))
     except KeyboardInterrupt:
         pass
     finally:

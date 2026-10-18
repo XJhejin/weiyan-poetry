@@ -1,0 +1,48 @@
+plugins { id 'com.android.application'; id 'com.chaquo.python' }
+
+def clientRoot = rootProject.projectDir.parentFile
+def releaseText = new File(clientRoot, 'release_config.py').getText('UTF-8')
+def appVersion = (releaseText =~ /VERSION = "([^"]+)"/)[0][1]
+def versionParts = appVersion.tokenize('.').collect { it as int }
+
+android {
+    namespace 'com.weiyan.poetry'
+    compileSdk 35
+    buildFeatures { buildConfig true }
+    defaultConfig {
+        applicationId 'com.weiyan.poetry'
+        minSdk 24
+        targetSdk 35
+        versionCode versionParts[0] * 10000 + versionParts[1] * 100 + versionParts[2]
+        versionName appVersion
+        ndk { abiFilters 'arm64-v8a', 'x86_64' }
+        testInstrumentationRunner 'com.weiyan.poetry.SmokeInstrumentation'
+    }
+    buildTypes {
+        release { minifyEnabled false }
+    }
+    sourceSets.main.assets.srcDirs += [layout.buildDirectory.dir('generated/assets')]
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    packaging { jniLibs { useLegacyPackaging false } }
+}
+chaquopy {
+    defaultConfig {
+        version '3.12'
+        pip { install 'PyNaCl==1.5.0'; install 'simple-websocket==1.1.0' }
+    }
+    sourceSets { main { srcDirs = [layout.buildDirectory.dir('generated/python').get().asFile] } }
+}
+tasks.register('prepareSharedClient', Sync) {
+    from(clientRoot) { include 'main.py', 'secure.py', 'update.py', 'release_config.py' }
+    from('src/main/python')
+    into layout.buildDirectory.dir('generated/python')
+}
+tasks.register('prepareClientUi', Sync) {
+    from(new File(clientRoot, 'ui')) { exclude '**/*.ico' }
+    into layout.buildDirectory.dir('generated/assets/ui')
+}
+tasks.configureEach { task ->
+    if (task.name.startsWith('generate') && task.name.contains('Python')) task.dependsOn 'prepareSharedClient'
+    if (task.name.startsWith('merge') && task.name.endsWith('Assets')) task.dependsOn 'prepareClientUi'
+}
+tasks.named('preBuild').configure { dependsOn 'prepareSharedClient', 'prepareClientUi' }

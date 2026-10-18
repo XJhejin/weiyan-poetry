@@ -28,6 +28,7 @@ from nacl.exceptions import CryptoError, BadSignatureError
 
 DOMAIN = b"WeiyanPoetry/envelope/v2\0"
 DEVICE_DOMAIN = b"WeiyanPoetry/device/v2\0"
+MAX_FILE = 20 * 1024 * 1024
 
 
 def canonical(value):
@@ -61,6 +62,24 @@ def validate_image(image):
     return {'data': b64(raw), 'mime': mime}
 
 
+def validate_file(file):
+    if not isinstance(file, dict) or not isinstance(file.get('data'), str):
+        raise SecurityError('文件格式不正确。')
+    raw = unb64(file['data'])
+    name = file.get('name')
+    if len(raw) > MAX_FILE or not isinstance(name, str) or not 1 <= len(name) <= 180 or any(ord(c) < 32 or c in '/\\' for c in name):
+        raise SecurityError('文件名无效，或文件超过 20 MB。')
+    kind, mime = 'file', 'application/octet-stream'
+    if file.get('kind') == 'video':
+        if len(raw) >= 12 and raw[4:8] == b'ftyp':
+            kind, mime = 'video', 'video/mp4'
+        elif raw.startswith(b'\x1aE\xdf\xa3'):
+            kind, mime = 'video', 'video/webm'
+        else:
+            raise SecurityError('视频预览支持 MP4 和 WebM 格式，请将其他格式作为普通文件发送。')
+    return {'data': b64(raw), 'name': name, 'size': len(raw), 'kind': kind, 'mime': mime}
+
+
 class SecurityError(ValueError):
     pass
 
@@ -72,7 +91,10 @@ class RemoteError(ValueError):
 
 
 def protect(raw, decrypt=False):
-    """DPAPI user scope: keys are usable only by this Windows user on this PC."""
+    """Use the platform account key; never fall back to an unprotected key."""
+    if os.environ.get("WEIYAN_PLATFORM") == "android":
+        from java import jclass
+        return bytes(jclass("com.weiyan.poetry.KeyVault").protect(raw, decrypt))
     class Blob(ctypes.Structure):
         _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
     buffer = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
@@ -126,7 +148,10 @@ class Vault:
                 try:
                     # Windows rename fails if the destination exists and also
                     # works on exFAT, where hard links are unavailable.
-                    os.rename(temporary, key_file)
+                    if os.name == 'nt':
+                        os.rename(temporary, key_file)
+                    else:
+                        os.link(temporary, key_file)
                 except FileExistsError:
                     key = protect(key_file.read_bytes(), decrypt=True)
             finally:
@@ -223,7 +248,7 @@ class SecureClient:
         self.device_id = keys["device_id"]
         self.private = PrivateKey(unb64(keys["box"]))
         self.signing = SigningKey(unb64(keys["sign"]))
-        device = {"device_id": self.device_id, "box_key": b64(bytes(self.private.public_key)), "sign_key": b64(bytes(self.signing.verify_key)), "name": "Windows 客户端"}
+        device = {"device_id": self.device_id, "box_key": b64(bytes(self.private.public_key)), "sign_key": b64(bytes(self.signing.verify_key)), "name": "安卓客户端" if os.environ.get('WEIYAN_PLATFORM') == 'android' else "Windows 客户端"}
         proof = b64(self.signing.sign(DEVICE_DOMAIN + canonical(device)).signature)
         if not bootstrap.get('offline'):
             self.remote("/api/devices", {**device, "proof": proof})
@@ -294,9 +319,15 @@ class SecureClient:
                 raise ValueError("消息最多 2000 个字符。")
             image_id = data.get("image_id")
             image = self.vault.get("image", image_id) if image_id else None
+            file_id = data.get('file_id')
+            attachment = self.vault.get('file', file_id) if file_id else None
+            if file_id and not attachment:
+                raise ValueError('文件无法发送，请重新选择。')
+            if image and attachment:
+                raise ValueError('每条消息请选择一项附件。')
             if image_id and not image:
                 raise ValueError("图片无法发送，请重新选择。")
-            if not body.strip() and not image:
+            if not body.strip() and not image and not attachment:
                 raise ValueError("写点什么，再寄出这封小笺吧。")
             directory, changed, _ = self.directory(cid)
             if changed:
@@ -309,6 +340,12 @@ class SecureClient:
             if pending is None:
                 created = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".000Z"
                 clear = {"body": body, "image": image, "sender": self.me, "created_at": created}
+                if attachment:
+                    clear['attachment'] = attachment
+                if cid.startswith('group:'):
+                    group = self.remote('/api/groups?conversation_id=' + quote(cid))['conversation']['group']
+                    if group['nickname']:
+                        clear['sender'] = {**self.me, 'nickname': group['nickname']}
                 key = secrets.token_bytes(32)
                 packet = {"v": 2, "conversation_id": cid, "sender_id": self.me["id"], "device_id": self.device_id, "client_id": client_id,
                           "ciphertext": b64(bytes(SecretBox(key).encrypt(canonical(clear)))),
@@ -325,6 +362,9 @@ class SecureClient:
             clear = pending["clear"]
             message = {"id": response["id"], "conversation_id": cid, "client_id": client_id, "body": clear["body"], "sender": clear["sender"],
                        "created_at": clear["created_at"], "image": f"/local-images/{image_id}" if image_id else None, "encrypted": True}
+            if clear.get('attachment'):
+                message['attachment'] = {k: v for k, v in clear['attachment'].items() if k != 'data'}
+                message['attachment']['url'] = '/local-files/' + file_id
             self.vault.save_message(message)
             self.vault.delete("pending", client_id)
             return message
@@ -369,8 +409,17 @@ class SecureClient:
                         image_id = hashlib.sha256((packet["sender_id"] + ":" + packet["client_id"]).encode()).hexdigest()
                         self.vault.put("image", image_id, validate_image(clear["image"]))
                         image_url = "/local-images/" + image_id
+                    attachment = None
+                    if clear.get('attachment'):
+                        file_id = hashlib.sha256((packet['sender_id'] + ':' + packet['client_id']).encode()).hexdigest()
+                        file = validate_file(clear['attachment'])
+                        self.vault.put('file', file_id, file)
+                        attachment = {k: v for k, v in file.items() if k != 'data'}
+                        attachment['url'] = '/local-files/' + file_id
                     message = {"id": item["id"], "client_id": packet["client_id"], "conversation_id": cid, "body": clear["body"], "sender": clear["sender"],
                                "created_at": clear["created_at"], "image": image_url, "encrypted": True}
+                    if attachment:
+                        message['attachment'] = attachment
                     if self.vault.save_message(message):
                         result.append(message)
                     # Acknowledge only after the encrypted SQLite transaction commits.

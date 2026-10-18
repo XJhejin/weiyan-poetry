@@ -25,19 +25,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 import webbrowser
 import relay_core as relay
+import groups
+import friends
+from release_config import VERSION
 
 ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-DATA = Path(os.environ.get("WEIYAN_DATA_DIR", str(ROOT / "data"))).resolve()
+DEFAULT_DATA = Path.home() / "Library/Application Support/WeiyanPoetry/server" if sys.platform == 'darwin' else ROOT / "data"
+DATA = Path(os.environ.get("WEIYAN_DATA_DIR", str(DEFAULT_DATA))).resolve()
 PUBLIC = ROOT / "public"
 DB_PATH = DATA / "weiyan.sqlite3"
 COOKIE = "weiyan_session"
 SESSION_DAYS = 30
-MAX_BODY = 12 * 1024 * 1024
+MAX_BODY = 48 * 1024 * 1024
 MAX_IMAGE = 5 * 1024 * 1024
 ROOMS = [
-    ("room:lobby", "诗集小客厅", "交流日常，分享文字与见闻。", "bunny", "#ffe4ec"),
-    ("room:inspiration", "灵感交换所", "交流创作思路，分享文字片段与灵感。", "sparkles", "#fff0d6"),
-    ("room:night", "晚安放映室", "在此分享一天的见闻，以交谈作结。", "moon", "#eae5ff"),
+    ("room:lobby", "-扉页-", "交流日常，分享文字与见闻。", "flower", "#ffe4ec"),
 ]
 
 
@@ -96,6 +98,9 @@ def initialize():
             inserted = db.execute("INSERT OR IGNORE INTO conversations VALUES (?, 'room', ?, ?, ?, ?, ?)",
                                   (cid, name, description, avatar, color, now())).rowcount
         relay.initialize(db, DATA)
+        groups.initialize(db)
+        friends.initialize(db)
+        db.execute("UPDATE conversations SET name='-扉页-' WHERE id='room:lobby'")
         db.execute("DELETE FROM sessions WHERE expires < ?", (time.time(),))
 
 
@@ -184,6 +189,8 @@ def access(db, cid, uid):
     conv = db.execute("SELECT * FROM conversations WHERE id=?", (cid,)).fetchone()
     if conv is None:
         raise ApiError("这个会话不存在。", 404)
+    if conv['kind'] == 'group':
+        groups.membership(db, cid, uid, ApiError)
     if conv["kind"] != "room" and not db.execute(
         "SELECT 1 FROM members WHERE conversation_id=? AND user_id=?", (cid, uid)
     ).fetchone():
@@ -199,6 +206,8 @@ def recipients(db, conv):
 
 def conversation_json(db, row, uid):
     item = dict(row)
+    if row['kind'] == 'group':
+        item['group'] = groups.summary(db, row['id'], uid)
     if row["kind"] == "direct":
         peer = db.execute("SELECT u.* FROM users u JOIN members mb ON u.id=mb.user_id "
                           "WHERE mb.conversation_id=? AND u.id!=?", (row["id"], uid)).fetchone()
@@ -294,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
             path = unquote(parsed.path)
             params = parse_qs(parsed.query)
             if path == "/api/health":
-                return self.json_response({"ok": True, "app": "未言诗集", "version": "2.0.0", "privacy": self.privacy()})
+                return self.json_response({"ok": True, "app": "未言诗集", "version": VERSION, "privacy": self.privacy()})
             if path.startswith("/api/") or path.startswith("/uploads/"):
                 with connect() as db:
                     me = self.auth(db)
@@ -310,13 +319,15 @@ class Handler(BaseHTTPRequestHandler):
                             raise ApiError("需要 WebSocket 连接。", 426)
                         return self.websocket(uid, device_id)
                     if path == "/api/bootstrap":
-                        convs = db.execute("SELECT c.* FROM conversations c WHERE c.kind='room' OR EXISTS "
+                        convs = db.execute("SELECT c.* FROM conversations c WHERE (c.kind='room' AND c.id='room:lobby') OR EXISTS "
                                            "(SELECT 1 FROM members m WHERE m.conversation_id=c.id AND m.user_id=?)", (uid,)).fetchall()
                         contacts = db.execute("SELECT u.* FROM users u JOIN contacts c ON u.id=c.peer_id WHERE c.user_id=? ORDER BY u.nickname", (uid,)).fetchall()
                         online = EVENTS.online()
                         online_users = [public_user(r) for r in db.execute("SELECT * FROM users WHERE id IN (" + ",".join("?" * len(online)) + ")", online)] if online else []
                         return self.json_response({"me": public_user(me), "conversations": [conversation_json(db, r, uid) for r in convs],
-                                                   "contacts": [public_user(r) for r in contacts], "online": online, "online_users": online_users, "server_id": relay.setting(db, "server_id"), "privacy": relay.privacy(db)})
+                                                   "contacts": [public_user(r) for r in contacts], "online": online, "online_users": online_users, "server_id": relay.setting(db, "server_id"), "privacy": relay.privacy(db), "group_invites": groups.invitations(db, uid), "friend_requests": friends.pending(db, uid), "outgoing_friend_requests": friends.outgoing(db, uid)})
+                    if path == '/api/groups':
+                        return self.json_response(groups.details(db, params.get('conversation_id', [''])[0], uid, sys.modules[__name__]))
                     if path == "/api/keys":
                         cid = params.get("conversation_id", [""])[0]
                         access(db, cid, uid)
@@ -329,8 +340,11 @@ class Handler(BaseHTTPRequestHandler):
                         query = params.get("q", [""])[0].strip()[:40]
                         if len(query) < 1:
                             return self.json_response({"users": []})
+                        if query.startswith('@'):
+                            rows = db.execute("SELECT * FROM users WHERE id NOT IN (?, 'system') AND is_guest=0 AND disabled=0 AND username=? COLLATE NOCASE LIMIT 20", (uid, query[1:])).fetchall()
+                            return self.json_response({'users': [public_user(r) for r in rows]})
                         term = "%" + escape_like(query) + "%"
-                        rows = db.execute("SELECT * FROM users WHERE id NOT IN (?, 'system') AND is_guest=0 AND "
+                        rows = db.execute("SELECT * FROM users WHERE id NOT IN (?, 'system') AND is_guest=0 AND disabled=0 AND "
                                           "(username LIKE ? ESCAPE '\\' OR nickname LIKE ? ESCAPE '\\') LIMIT 20", (uid, term, term)).fetchall()
                         return self.json_response({"users": [public_user(r) for r in rows]})
                     raise ApiError("没有找到这个地址。", 404)
@@ -382,6 +396,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response({"me": public_user(row)}, cookie=cookie)
                 me = self.auth(db)
                 uid = me["id"]
+                if path in ('/api/friends', '/api/contacts'):
+                    rate_limit(('friend', uid), 40)
+                    return self.json_response(friends.action(db, uid, payload, sys.modules[__name__]))
+                if path == '/api/groups':
+                    rate_limit(('groups', uid), 80)
+                    return self.json_response(groups.action(db, uid, payload, sys.modules[__name__]))
                 if path == "/api/logout":
                     cookie = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
                     token = cookie[COOKIE].value if COOKIE in cookie else ""
@@ -404,13 +424,6 @@ class Handler(BaseHTTPRequestHandler):
                     db.commit()
                     EVENTS.publish({"type": "profile"})
                     return self.json_response({"me": public_user(db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone())})
-                if path == "/api/contacts":
-                    peer_id = clean_text(payload.get("user_id"), 64, "用户")
-                    if peer_id == uid or not db.execute("SELECT 1 FROM users WHERE id=? AND id!='system'", (peer_id,)).fetchone():
-                        raise ApiError("没有找到这位朋友。", 404)
-                    db.execute("INSERT OR IGNORE INTO contacts VALUES (?,?)", (uid, peer_id))
-                    db.commit()
-                    return self.json_response({"ok": True})
                 if path == "/api/conversations":
                     peer_id = clean_text(payload.get("peer_id"), 64, "用户")
                     if peer_id == uid or not db.execute("SELECT 1 FROM users WHERE id=? AND id!='system'", (peer_id,)).fetchone():
@@ -419,7 +432,6 @@ class Handler(BaseHTTPRequestHandler):
                     db.execute("INSERT OR IGNORE INTO conversations(id,kind,created_at) VALUES (?,'direct',?)", (cid, now()))
                     for member in (uid, peer_id):
                         db.execute("INSERT OR IGNORE INTO members(conversation_id,user_id) VALUES (?,?)", (cid, member))
-                    db.execute("INSERT OR IGNORE INTO contacts VALUES (?,?)", (uid, peer_id))
                     db.commit()
                     EVENTS.publish({"type": "conversations"}, {uid, peer_id})
                     return self.json_response({"conversation": conversation_json(db, db.execute("SELECT * FROM conversations WHERE id=?", (cid,)).fetchone(), uid)})
@@ -600,7 +612,7 @@ def main():
     initialize()
     with connect() as db:
         args.host = args.host or relay.setting(db, 'listen_host', '0.0.0.0')
-        args.port = args.port or int(relay.setting(db, 'listen_port', '8765'))
+        args.port = args.port or int(relay.setting(db, 'listen_port', '23074'))
     if not args.headless:
         from admin import launch
         return launch(sys.modules[__name__], args)
@@ -623,7 +635,7 @@ if __name__ == "__main__":
     except Exception as error:
         DATA.mkdir(parents=True, exist_ok=True)
         (DATA / "startup-error.txt").write_text(type(error).__name__ + ": " + str(error), encoding="utf-8")
-        if getattr(sys, "frozen", False):
+        if getattr(sys, "frozen", False) and sys.platform == 'win32':
             import ctypes
             ctypes.windll.user32.MessageBoxW(None, str(error), "未言诗集服务端", 16)
         else:
