@@ -101,3 +101,5 @@ python 服务端/tests/test_chat.py
 通信管理参考 HarmonyChat 的心跳、重连、消息指纹、ACK 与重传去重原理；界面、Windows 软件与加密存储为独立实现，不兼容 MobileIMSDK 协议。详见 [技术说明](技术说明.md)。
 
 Android 构建使用 JDK 17、Gradle 8.10、SDK 35：在 `客户端/android` 运行 `gradle :app:assembleRelease`。维护者使用 `客户端/tools/sign_apk.py` 固定证书签名，签名资料保存在项目外。Mac 构建在 ARM64 macOS 运行 `python 服务端/tools/build_macos.py`。三个平台的 CI 构建与实际运行测试见 `.github/workflows/`。正式发布使用 `客户端/tools/publish.py`，要求五个包齐备并生成统一签名清单。
+
+Windows 托盘有未读时交替闪烁，悬停显示最新发送者与消息预览，打开客户端后停止；系统弹窗通知保持通用提示。界面弹窗与按钮采用短暂渐变/缩放，遵循系统减少动态效果设置。Windows 原生窗口开合也采用渐变。

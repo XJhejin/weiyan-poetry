@@ -158,7 +158,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return self.respond(self.server.updater.info())
         if parsed.path == "/manage/update/status":
             return self.respond(self.server.updater.progress)
-        target = self.server.public / {"/": "index.html", "/admin.js": "admin.js", "/admin.css": "admin.css", "/logo.svg": "logo.svg"}.get(parsed.path, "missing")
+        target = self.server.public / {"/": "index.html", "/admin.js": "admin.js", "/motion.js": "motion.js", "/admin.css": "admin.css", "/logo.svg": "logo.svg"}.get(parsed.path, "missing")
         if not target.is_file():
             return self.respond({"error": "地址不存在。"}, 404)
         mime = "text/html" if target.suffix == ".html" else "text/css" if target.suffix == ".css" else "image/svg+xml" if target.suffix == ".svg" else "application/javascript"
@@ -213,7 +213,9 @@ def launch(core, args):
                 time.sleep(0.5)
         else:
             import webview
-            webview.create_window("未言诗集 · 服务端管理", url, width=1250, height=850, min_size=(1020, 700), background_color="#fff8fa", text_select=True)
+            window = webview.create_window("未言诗集 · 服务端管理", url, width=1250, height=850, min_size=(1020, 700), background_color="#fff8fa", text_select=True)
+            from window_effects import WindowEffects
+            effects = WindowEffects(window, close_window=True)
             import sys
             webview.start(gui="cocoa" if sys.platform == 'darwin' else "edgechromium", private_mode=True, icon=str(admin.public / "logo.ico"))
     except KeyboardInterrupt:

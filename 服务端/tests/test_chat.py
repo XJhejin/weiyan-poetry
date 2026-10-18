@@ -377,5 +377,27 @@ class ChatIntegration(unittest.TestCase):
         self.alice.request('/api/attachments',dict(name='../escape.txt',kind='file',data='YQ=='),expected=400)
         self.alice.request('/api/attachments',dict(name='fake.mp4',kind='video',data='YQ=='),expected=400)
 
+    def test_12_logout_clears_local_session_and_works_offline(self):
+        session=Session(self.client_base)
+        session.request('/api/register',dict(username='logout_test',password='logout-test-5582',nickname='退出验证'))
+        session.request('/api/bootstrap')
+        cookie='; '.join(c.name+'='+c.value for c in session.cookies)
+        result=session.request('/api/logout',{})
+        self.assertTrue(result['ok']);self.assertTrue(result['remote_logged_out'])
+        session.request('/api/bootstrap',expected=401)
+        replay=urllib.request.Request(self.client_base+'/api/bootstrap',headers={'Cookie':cookie})
+        with self.assertRaises(urllib.error.HTTPError) as rejected:
+            urllib.request.urlopen(replay)
+        self.assertEqual(rejected.exception.code,401)
+        session.request('/api/login',dict(username='logout_test',password='logout-test-5582'))
+        session.request('/api/bootstrap')
+        self.stop_process(self.__class__.server)
+        try:
+            result=session.request('/api/logout',{})
+            self.assertTrue(result['ok']);self.assertFalse(result['remote_logged_out'])
+            self.assertFalse(list(session.cookies))
+        finally:
+            self.__class__.server=self.start_server()
+
 
 if __name__=='__main__':unittest.main(verbosity=2)

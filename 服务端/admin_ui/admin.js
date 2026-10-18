@@ -8,7 +8,7 @@ const titles={overview:['运行概览','掌握服务状态，让每一次交流�
 function tab(id){$$('.page').forEach(p=>p.hidden=p.id!==id);$$('[data-tab]').forEach(b=>b.classList.toggle('selected',b.dataset.tab===id));$('#page-title').textContent=titles[id][0];$('#page-description').textContent=titles[id][1];}
 $$('[data-tab]').forEach(b=>b.onclick=()=>tab(b.dataset.tab));$$('[data-go]').forEach(b=>b.onclick=()=>tab(b.dataset.go));
 function date(v){return new Date(typeof v==='number'?v*1000:v).toLocaleString('zh-CN',{hour12:false});}
-function confirmAction(title,text){$('#confirm-title').textContent=title;$('#confirm-text').textContent=text;$('#confirm').showModal();return new Promise(resolve=>{$('#confirm-cancel').onclick=()=>{$('#confirm').close();resolve(false);};$('#confirm-ok').onclick=()=>{$('#confirm').close();resolve(true);};$('#confirm').oncancel=()=>resolve(false);});}
+function confirmAction(title,text){$('#confirm-title').textContent=title;$('#confirm-text').textContent=text;WeiyanMotion.openDialog($('#confirm'));return new Promise(resolve=>{$('#confirm-cancel').onclick=()=>{WeiyanMotion.closeDialog($('#confirm'));resolve(false);};$('#confirm-ok').onclick=()=>{WeiyanMotion.closeDialog($('#confirm'));resolve(true);};$('#confirm').oncancel=()=>resolve(false);});}
 async function refresh(){if(busy)return;try{state=await api('/manage/state');render();}catch(e){$('#service-state').textContent='管理连接暂时中断';$('#status-dot').classList.add('off');}}
 function render(){
   $('#service-state').textContent=state.running?'服务正在运行':'服务已停止';$('#status-dot').classList.toggle('off',!state.running);

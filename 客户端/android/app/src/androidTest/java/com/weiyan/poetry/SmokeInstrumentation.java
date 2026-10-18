@@ -25,7 +25,7 @@ public class SmokeInstrumentation extends Instrumentation {
         if(!latch.await(10,TimeUnit.SECONDS))throw new AssertionError("WebView did not respond");
         return value.get();
     }
-    private void waitJs(WebView web,String condition) throws Exception {for(int i=0;i<150;i++){if("true".equals(js(web,condition)))return;Thread.sleep(200);}throw new AssertionError("UI condition timed out: "+condition+"; state="+js(web,"document.body.innerText.slice(0,2000)"));}
+    private void waitJs(WebView web,String condition) throws Exception {for(int i=0;i<150;i++){if("true".equals(js(web,condition)))return;Thread.sleep(200);}throw new AssertionError("UI condition timed out: "+condition+"; error="+js(web,"window.uiError || ''")+"; state="+js(web,"document.body.innerText.slice(0,2000)"));}
     @Override public void onStart(){
         Bundle result=new Bundle();
         try {

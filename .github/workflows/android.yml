@@ -47,6 +47,7 @@ jobs:
             adb install 客户端/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             adb shell pm grant com.weiyan.poetry android.permission.POST_NOTIFICATIONS
             adb shell am instrument -w -e server http://10.0.2.2:23180 com.weiyan.poetry.test/com.weiyan.poetry.SmokeInstrumentation | tee android-smoke.txt
+            adb logcat -d > android-logcat.txt
             grep -q 'WeiyanSmoke=PASS' android-smoke.txt
             mkdir -p build-output
             adb shell screencap -p /sdcard/weiyan-phone.png
@@ -55,7 +56,7 @@ jobs:
         if: always()
         run: |
           mkdir -p build-output
-          adb logcat -d > build-output/android-logcat.txt || true
+          cp android-logcat.txt build-output/ 2>/dev/null || true
           cp android-smoke.txt build-output/ 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()

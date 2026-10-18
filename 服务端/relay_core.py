@@ -95,7 +95,7 @@ def receive_directory(db, cid, uid, device_id, error):
     known = {d['device_id'] for d in result}
     # A queued signature remains verifiable after its sender leaves the group.
     # Scope historic public keys to packets still addressed to this exact device.
-    rows = db.execute('SELECT p.envelope FROM relay_packets p JOIN deliveries r ON r.packet_id=p.id WHERE r.device_id=?', (device_id,))
+    rows = db.execute('SELECT p.envelope FROM relay_packets p JOIN deliveries r ON r.packet_id=p.id JOIN receipts t ON t.id=p.id WHERE r.device_id=? AND t.conversation_id=?', (device_id, cid))
     for row in rows:
         packet = json.loads(row['envelope'])
         if packet['conversation_id'] != cid or packet['device_id'] in known:

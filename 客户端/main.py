@@ -113,6 +113,27 @@ class Gateway(BaseHTTPRequestHandler):
             if not self.valid_local_request():
                 return self.json_response({"error": "请求来源不正确。"}, 403)
             path = urlsplit(self.path).path
+            if path == '/api/logout' and self.command == 'POST':
+                self.read_json()
+                cookie = self.relay_cookie()
+                key = hashlib.sha256((CONFIG['server_url'] + cookie).encode()).hexdigest()
+                with self.server.context_lock:
+                    if not hasattr(self.server, 'signed_out'):
+                        self.server.signed_out = set()
+                    self.server.signed_out.add(key)
+                    old = self.server.contexts.pop(key, None)
+                    if old:
+                        old.on_received = None
+                    if getattr(self.server, 'background', None):
+                        self.server.background.clear()
+                    (PROFILE / 'sessions' / (key + '.dpapi')).unlink(missing_ok=True)
+                remote_logged_out = False
+                try:
+                    status, _, _ = self.upstream('/api/logout', {}, timeout=3)
+                    remote_logged_out = status in (200, 401)
+                except RemoteError:
+                    pass
+                return self.json_response({'ok': True, 'remote_logged_out': remote_logged_out}, clear_cookie=True)
             if path == '/desktop/notifications':
                 if self.command == 'POST':
                     data = self.read_json()
@@ -170,7 +191,7 @@ class Gateway(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-eval'; "
-                             "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; "
+                             "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; "
                              "object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
             self.end_headers()
             self.wfile.write(raw)
@@ -185,6 +206,8 @@ class Gateway(BaseHTTPRequestHandler):
         cookie = self.relay_cookie()
         server_url = CONFIG["server_url"]
         key = hashlib.sha256((server_url + cookie).encode()).hexdigest()
+        if key in getattr(self.server, 'signed_out', set()):
+            raise RemoteError('请先登录。', 401)
         cache = PROFILE / 'sessions' / (key + '.dpapi')
         try:
             status, _, raw = self.upstream("/api/bootstrap")
@@ -206,6 +229,8 @@ class Gateway(BaseHTTPRequestHandler):
                 temporary.write_bytes(protect(json.dumps(data, ensure_ascii=False).encode()))
                 temporary.replace(cache)
         with self.server.context_lock:
+            if key in getattr(self.server, 'signed_out', set()):
+                raise RemoteError('请先登录。', 401)
             context = self.server.contexts.get(key)
             if context is None:
                 context = SecureClient(PROFILE, server_url, cookie, data)
@@ -346,10 +371,10 @@ class Gateway(BaseHTTPRequestHandler):
             return self.json_response({"messages": list(reversed(messages[:50])), "has_more": len(messages) > 50})
         return self.json_response({"error": "没有找到这个地址。"}, 404)
 
-    def upstream(self, path, data=None):
+    def upstream(self, path, data=None, timeout=20):
         parsed = urlsplit(CONFIG["server_url"])
         cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-        connection = cls(parsed.hostname, parsed.port, timeout=20)
+        connection = cls(parsed.hostname, parsed.port, timeout=timeout)
         headers = {"Host": parsed.netloc, "Origin": CONFIG["server_url"], "X-Weiyan-Client": "web", "Cookie": self.relay_cookie(), "Content-Type": "application/json"}
         try:
             connection.request("POST" if data is not None else "GET", path, body=json.dumps(data, ensure_ascii=False).encode() if data is not None else None, headers=headers)

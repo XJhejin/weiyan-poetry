@@ -5,13 +5,21 @@ from pathlib import Path
 import threading
 from PIL import Image, ImageDraw
 import pystray
+from window_effects import WindowEffects
 
 
 class Tray:
     def __init__(self, window, icon, config, save_config):
         self.window, self.config, self.save_config = window, config, save_config
         self.exiting, self.hidden, self.unread = False, False, 0
+        self.lock = threading.RLock()
+        self.stopped = threading.Event()
+        self.effects = WindowEffects(window)
         self.image = Image.open(icon).convert('RGBA')
+        self.badge = self.image.copy()
+        draw = ImageDraw.Draw(self.badge)
+        size = self.badge.width
+        draw.ellipse((size*.61, size*.02, size*.98, size*.39), fill='#cf7294', outline='#fff8fa', width=max(1,size//50))
         self.icon = pystray.Icon('WeiyanPoetry', self.image, '未言诗集', menu=pystray.Menu(
             pystray.MenuItem('打开未言诗集', self.show, default=True),
             pystray.MenuItem('新消息提醒', self.toggle, checked=lambda item: self.config.get('native_notifications', True)),
@@ -20,46 +28,67 @@ class Tray:
 
     def start(self):
         threading.Thread(target=self.icon.run, daemon=True, name='windows-tray').start()
+        threading.Thread(target=self.pulse, daemon=True, name='unread-tray-animation').start()
 
     def closing(self):
         if self.exiting:
             return True
         self.hidden = True
-        self.window.hide()
+        self.effects.hide()
         return False
 
     def show(self, *args):
         self.hidden = False
-        self.unread = 0
-        self.icon.icon = self.image
-        self.icon.title = '未言诗集'
-        self.window.show()
-        self.window.restore()
+        self.clear_unread()
+        self.effects.show()
+
+    def foreground(self):
+        foreground = ctypes.windll.user32.GetForegroundWindow()
+        pid = ctypes.c_ulong()
+        ctypes.windll.user32.GetWindowThreadProcessId(foreground, ctypes.byref(pid))
+        return not self.hidden and pid.value == os.getpid()
+
+    def clear_unread(self):
+        with self.lock:
+            self.unread = 0
+            self.icon.icon = self.image
+            self.icon.title = '未言诗集'
+
+    def pulse(self):
+        bright = False
+        while not self.stopped.wait(.6):
+            if self.unread:
+                if self.foreground():
+                    self.clear_unread()
+                else:
+                    bright = not bright
+                    self.icon.icon = self.badge if bright else self.image
 
     def toggle(self, *args):
         self.save_config(not self.config.get('native_notifications', True))
         self.icon.update_menu()
 
     def notify(self, message):
-        foreground = ctypes.windll.user32.GetForegroundWindow()
-        pid = ctypes.c_ulong()
-        ctypes.windll.user32.GetWindowThreadProcessId(foreground, ctypes.byref(pid))
-        if not self.hidden and pid.value == os.getpid():
+        if self.foreground():
             return
-        self.unread += 1
-        badge = self.image.copy()
-        draw = ImageDraw.Draw(badge)
-        size = badge.width
-        draw.ellipse((size*.61, size*.02, size*.98, size*.39), fill='#cf7294', outline='#fff8fa', width=max(1,size//50))
-        self.icon.icon = badge
-        self.icon.title = f'未言诗集 · {self.unread} 条新消息'
+        with self.lock:
+            self.unread += 1
+            self.icon.icon = self.badge
+            preview = message.get('body', '').strip()
+            if not preview:
+                file = message.get('attachment')
+                preview = ('[视频] ' if file.get('kind') == 'video' else '[文件] ') + file['name'] if file else '[图片]' if message.get('image') else '新消息'
+            preview = ' '.join(preview.split())
+            title = f"未言诗集 · {self.unread} 条新消息\n{message['sender'].get('nickname', '联系人')}：{preview}"
+            self.icon.title = title.encode('utf-16-le')[:246].decode('utf-16-le', errors='ignore')
         if self.config.get('native_notifications', True):
             self.icon.notify('收到新的加密消息，点击托盘图标查看。', '未言诗集')
 
     def exit(self, *args):
         self.exiting = True
-        self.icon.stop()
-        self.window.destroy()
+        self.stopped.set()
+        self.effects._run(0.0, lambda: (self.icon.stop(), self.window.destroy()))
 
     def stop(self):
+        self.stopped.set()
         self.icon.stop()

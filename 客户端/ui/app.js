@@ -5,7 +5,7 @@ const icons = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const animals = { bunny:'🐰', cat:'🐱', bear:'🐻', flower:'🌼', moon:'🌙', sparkles:'✨' };
 const state = {me:null, conversations:[], contacts:[], online:[], users:new Map(), active:null, messages:new Map(), outbox:[], hasMore:false, view:'messages', filter:'all', authTab:'login', stream:null, connected:false, attachment:null, reply:null, sending:false, server:'', switching:0, loadingOlder:false};
-let toastTimer, searchTimer, typingTimer, typingSent=0, syncTimer, scrollTimer, attemptedAuth=false;
+let toastTimer, searchTimer, typingTimer, typingSent=0, syncTimer, scrollTimer, attemptedAuth=false, authGeneration=0;
 function avatar(user, small = false, online = false) { return `<span class="avatar${small ? ' small' : ''}" style="background:${escape(user.color || '#ffe4ec')}">${/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(user.avatar || '') ? `<img class="custom-avatar" src="${escape(user.avatar)}" alt="头像">` : animals[user.avatar] || '🌼'}${online ? '<span class="online-dot"></span>' : ''}</span>`; }
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').hidden = true, 3400); }
 function storageKey(name) { return `weiyan:${state.server}:${state.me?.id || 'guest'}:${name}`; }
@@ -43,13 +43,17 @@ function rememberUsers() {
   [state.me,...state.contacts,...state.conversations.map(c => c.peer).filter(Boolean)].forEach(u => state.users.set(u.id,u));
 }
 async function bootstrap({initial=false,refreshMessages=false}={}) {
+  const generation=authGeneration;
+  if(state.signingOut)return;
   const data = await api('/api/bootstrap');
+  if(generation!==authGeneration || state.signingOut)return;
   state.me=data.me; state.conversations=data.conversations; state.contacts=data.contacts; state.online=data.online;
   state.groupInvites=data.group_invites||[];
   state.friendRequests=data.friend_requests||[];state.outgoingFriendRequests=data.outgoing_friend_requests||[];
   if(typeof renderGroupInvites==='function')renderGroupInvites();
   if(typeof renderFriendRequests==='function')renderFriendRequests();
   if(state.loadedUser!==state.me.id){await migrateLocalPreferences(data);state.loadedUser=state.me.id;state.outbox=stored('outbox',[]).map(m=>({...m,status:'failed',inFlight:false}));}
+  if(generation!==authGeneration || state.signingOut)return;
   (data.online_users || []).forEach(u => state.users.set(u.id,u)); rememberUsers();
   $('#auth').hidden=true; $('#app').hidden=false; $('#boot').hidden=true;
   $('#my-avatar').innerHTML=avatar(state.me); $('#my-avatar').setAttribute('aria-label',`我的资料：${state.me.nickname}`);
@@ -61,6 +65,7 @@ async function bootstrap({initial=false,refreshMessages=false}={}) {
 }
 function scheduleSync() { clearTimeout(syncTimer); syncTimer=setTimeout(() => bootstrap().catch(() => {}), 180); }
 function connectEvents() {
+  if(!state.me || state.signingOut)return;
   state.stream?.close();
   state.stream = new IMTransport(data => {
     if (!state.me) return;
@@ -77,6 +82,7 @@ function connectEvents() {
   }, connected => {setConnection(connected);if(connected)bootstrap({refreshMessages:true}).then(()=>{for(const message of state.outbox.filter(m=>m.status==='failed' && (m.autoRetries||0)<3)){message.autoRetries=(message.autoRetries||0)+1;transmitOutgoing(message);}}).catch(()=>{});});
 }
 function showAuth(error='') {
+  authGeneration++;clearTimeout(syncTimer);state.signingOut=false;
   state.stream?.close(); state.stream=null; state.me=null; state.active=null; state.messages.clear(); state.loadedUser=null;localPreferences={};
   $('#app').hidden=true; $('#auth').hidden=false; $('#boot').hidden=true; $('#auth-error').textContent=error;
 }
@@ -121,7 +127,6 @@ function renderList() {
   let convs=state.conversations.filter(c=>c.name.toLowerCase().includes(q) || (c.last_message?.body || '').toLowerCase().includes(q));
   if(state.filter==='unread') convs=convs.filter(c=>c.unread>0);
   convs.sort((a,b)=>(Number(pins.includes(b.id))-Number(pins.includes(a.id))) || ((b.last_message?.id||0)-(a.last_message?.id||0)));
-  $('#conversation-count').textContent=state.conversations.length;
   const total=state.conversations.filter(c=>!muted.includes(c.id)).reduce((sum,c)=>sum+c.unread,0);
   $('#total-unread').hidden=!total; $('#total-unread').textContent=total>99?'99+':total;
   document.title=total?`(${total}) 未言诗集`:'未言诗集 · 每一句，都被温柔听见';
@@ -224,8 +229,8 @@ async function transmitOutgoing(outgoing) {
 async function openDirect(peerId) {
   try { const data=await post('/api/conversations',{peer_id:peerId}); await bootstrap(); state.view='messages'; closeModal(); await selectConversation(data.conversation.id); } catch(error){toast(error.message);}
 }
-function modal(title,content,extra='') { $('#modal-title').textContent=title; $('#modal-body').innerHTML=content; $('#modal').className='modal '+extra; if(!$('#modal').open) $('#modal').showModal(); }
-function closeModal(){ $('#modal').close(); clearTimeout(searchTimer); }
+function modal(title,content,extra='') { $('#modal-title').textContent=title; $('#modal-body').innerHTML=content; $('#modal').className='modal '+extra; WeiyanMotion.openDialog($('#modal')); }
+function closeModal(){ clearTimeout(searchTimer); return WeiyanMotion.closeDialog($('#modal')); }
 async function openSecurity() {
   modal('加密与隐私','<p>正在读取本机加密信息…</p>');
   try {
@@ -233,7 +238,7 @@ async function openSecurity() {
     const info=await api('/desktop/security'+(cid?'?conversation_id='+encodeURIComponent(cid):''));
     if($('#modal-title').textContent!=='加密与隐私')return;
     $('#encryption-info').classList.toggle('key-warning',info.key_changed);
-    $('#modal-body').innerHTML=`<div class="security-intro">${icons('lock')}<div><h3>你的交流，已启用端到端加密</h3><p>消息离开本机前加密，仅会话成员的设备可解密。</p></div></div><div class="security-rules"><div><b>文字与图片</b><p>使用 libsodium 加密，并校验发送设备签名。服务端没有消息解密私钥。</p></div><div><b>本机聊天记录</b><p>在当前设备加密保存，Windows 使用账号保护密钥，安卓使用系统密钥库。换设备登录无法自动找回旧记录。</p></div><div><b>离线密文</b><p>未送达的密文永久保留，不设队列总容量限制；设备确认接收后删除。</p></div><div><b>会话范围</b><p>${currentConversation()?.kind==='room'?'本公开聊天室面向全部已注册成员；发送时登记的成员设备均可解密。':'私聊和群聊仅向当前会话成员已登记的设备加密分发。'}服务端仍可见账号、设备、会话成员与投递元数据。</p></div></div><details class="security-fingerprints" ${info.key_changed?'open':''}><summary>核对设备安全指纹${info.key_changed?' · 发现设备变化':''}</summary><p>首次联系会记住设备公钥。请通过当面或其他可信渠道核对指纹；新增或更换设备需确认。</p><div class="fingerprint-own"><b>此设备</b><code>${escape(info.fingerprint)}</code></div>${info.devices.map(d=>`<div class="fingerprint-row${d.changed?' changed':''}"><b>${escape(d.nickname)} · ${escape(d.name)}${d.changed?' · 需要确认':''}</b><small>设备 ${escape(d.device_id.slice(0,12))}</small><code>${escape(d.fingerprint)}</code></div>`).join('')}${info.key_changed?'<div class="info-box">设备公钥发生变化，向这些设备发送和接收新消息已暂停。请核对指纹后再信任。</div><button class="primary" id="approve-devices">已核对，信任当前设备</button>':''}</details><p class="security-limit">本项目加密协议尚未经独立安全审计，不具备 Signal 双棘轮的前向保密能力。请保管好设备、系统账号与本机资料。</p>`;
+    $('#modal-body').innerHTML=`<div class="security-intro">${icons('lock')}<div><h3>你的交流，已启用端到端加密</h3><p>消息离开本机前加密，仅会话成员的设备可解密。</p></div></div><div class="security-rules"><div><b>文字、图片、视频与文件</b><p>使用 libsodium 加密，并校验发送设备签名。服务端没有消息解密私钥。</p></div><div><b>本机聊天记录</b><p>在当前设备加密保存，Windows 使用账号保护密钥，安卓使用系统密钥库。换设备登录无法自动找回旧记录。</p></div><div><b>离线密文</b><p>未送达的密文永久保留，不设队列总容量限制；设备确认接收后删除。</p></div><div><b>会话范围</b><p>${currentConversation()?.kind==='room'?'本公开聊天室面向全部已注册成员；发送时登记的成员设备均可解密。':'私聊和群聊仅向当前会话成员已登记的设备加密分发。'}服务端仍可见账号、设备、会话成员与投递元数据。</p></div></div><details class="security-fingerprints" ${info.key_changed?'open':''}><summary>核对设备安全指纹${info.key_changed?' · 发现设备变化':''}</summary><p>首次联系会记住设备公钥。请通过当面或其他可信渠道核对指纹；新增或更换设备需确认。</p><div class="fingerprint-own"><b>此设备</b><code>${escape(info.fingerprint)}</code></div>${info.devices.map(d=>`<div class="fingerprint-row${d.changed?' changed':''}"><b>${escape(d.nickname)} · ${escape(d.name)}${d.changed?' · 需要确认':''}</b><small>设备 ${escape(d.device_id.slice(0,12))}</small><code>${escape(d.fingerprint)}</code></div>`).join('')}${info.key_changed?'<div class="info-box">设备公钥发生变化，向这些设备发送和接收新消息已暂停。请核对指纹后再信任。</div><button class="primary" id="approve-devices">已核对，信任当前设备</button>':''}</details><p class="security-limit">本项目加密协议尚未经独立安全审计，不具备 Signal 双棘轮的前向保密能力。请保管好设备、系统账号与本机资料。</p>`;
     if($('#approve-devices'))$('#approve-devices').onclick=async()=>{try{await post('/desktop/security',{conversation_id:cid,approve:true,directory_digest:info.directory_digest});toast('设备信任已更新。');await openSecurity();await bootstrap({refreshMessages:true});}catch(e){toast(e.message);}};
   }catch(e){$('#modal-body').innerHTML=`<p>${escape(e.message)}</p>`;}
 }
@@ -283,7 +288,12 @@ function openSettings() {
   $('#logout-button').onclick=()=>{
     modal('退出登录',`<p>${state.me.is_guest?'你正在使用访客身份。退出后无法找回这个访客账号；可以先在个人资料中设置账号和密码。':'退出后聊天记录仍在本机加密保存，使用本机原系统账号重新登录后可继续查看。'}</p><div class="modal-actions">${state.me.is_guest?'<button class="text-button" id="keep-account">先保存账号</button>':'<button class="text-button" data-close>再待一会儿</button>'}<button class="primary" id="confirm-logout">确认退出</button></div>`);
     if($('#keep-account'))$('#keep-account').onclick=()=>openProfile();
-    $('#confirm-logout').onclick=async()=>{try{await post('/api/logout');closeModal();showAuth();$('#auth-password').value='';}catch(error){toast(error.message);}};
+    $('#confirm-logout').onclick=async()=>{
+      const button=$('#confirm-logout');button.disabled=true;state.signingOut=true;authGeneration++;clearTimeout(syncTimer);
+      state.stream?.close();state.stream=null;
+      try{await storageWrites;await post('/api/logout');await closeModal();showAuth();$('#auth-password').value='';}
+      catch(error){state.signingOut=false;button.disabled=false;toast(error.message);connectEvents();}
+    };
   };
 }
 function openSearch() {
