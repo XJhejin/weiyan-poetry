@@ -43,6 +43,7 @@ tasks.register('prepareClientUi', Sync) {
 }
 tasks.configureEach { task ->
     if (task.name.startsWith('generate') && task.name.contains('Python')) task.dependsOn 'prepareSharedClient'
+    if (task.name.startsWith('merge') && task.name.endsWith('PythonSources')) task.dependsOn 'prepareSharedClient'
     if (task.name.startsWith('merge') && task.name.endsWith('Assets')) task.dependsOn 'prepareClientUi'
 }
 tasks.named('preBuild').configure { dependsOn 'prepareSharedClient', 'prepareClientUi' }

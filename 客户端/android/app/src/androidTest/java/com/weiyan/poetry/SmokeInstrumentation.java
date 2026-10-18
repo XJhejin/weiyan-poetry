@@ -1,0 +1,61 @@
+package com.weiyan.poetry;
+
+import android.app.Activity;
+import android.app.Instrumentation;
+import android.content.Intent;
+import android.os.Bundle;
+import android.view.View;
+import android.view.ViewGroup;
+import android.webkit.WebView;
+import com.chaquo.python.Python;
+import com.chaquo.python.PyObject;
+import java.io.InputStream;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
+/** Runs only from the separate test APK. No test accounts or switches in release. */
+public class SmokeInstrumentation extends Instrumentation {
+    private Bundle args;
+    @Override public void onCreate(Bundle arguments){args=arguments;super.onCreate(arguments);start();}
+    private WebView find(View v){if(v instanceof WebView)return (WebView)v;if(v instanceof ViewGroup){for(int i=0;i<((ViewGroup)v).getChildCount();i++){WebView w=find(((ViewGroup)v).getChildAt(i));if(w!=null)return w;}}return null;}
+    private String js(WebView web,String source) throws Exception {
+        CountDownLatch latch=new CountDownLatch(1);AtomicReference<String> value=new AtomicReference<>();
+        runOnMainSync(()->web.evaluateJavascript(source,s->{value.set(s);latch.countDown();}));
+        if(!latch.await(10,TimeUnit.SECONDS))throw new AssertionError("WebView did not respond");
+        return value.get();
+    }
+    private void waitJs(WebView web,String condition) throws Exception {for(int i=0;i<150;i++){if("true".equals(js(web,condition)))return;Thread.sleep(200);}throw new AssertionError("UI condition timed out: "+condition+"; state="+js(web,"document.body.innerText.slice(0,2000)"));}
+    @Override public void onStart(){
+        Bundle result=new Bundle();
+        try {
+            Intent intent=new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            Activity activity=startActivitySync(intent);
+            WebView web=null;
+            for(int i=0;i<200&&web==null;i++){AtomicReference<WebView> found=new AtomicReference<>();runOnMainSync(()->found.set(find(activity.getWindow().getDecorView())));web=found.get();if(web==null)Thread.sleep(250);}
+            if(web==null)throw new AssertionError("Native application failed to start");
+            waitJs(web,"typeof state !== 'undefined' && typeof chooseAttachment==='function' && typeof openGroupInfo==='function' && typeof openFriendRequests==='function'");
+            String base=args.getString("server","http://10.0.2.2:23180");
+            js(web,"fetch('/desktop/config').then(r=>r.json()).then(c=>{window.defaultCorrect=c.server_url==='http://113.219.237.106:23074';return post('/desktop/config',{server_url:'"+base+"'});}).then(()=>{window.configured=true;})");
+            waitJs(web,"window.configured===true");
+            if(!"true".equals(js(web,"window.defaultCorrect")))throw new AssertionError("Wrong released server default");
+            js(web,"post('/api/register',{username:'android_ui_'+Date.now(),password:'Android-test-only-2288',nickname:'界面验证'}).then(()=>bootstrap({initial:true})).then(()=>{connectEvents();window.loggedIn=true;}).catch(e=>{window.uiError=e.message})");
+            waitJs(web,"window.loggedIn===true");
+            if(!"true".equals(js(web,"state.conversations.filter(c=>c.kind==='room').length===1 && state.conversations.find(c=>c.kind==='room').name==='-扉页-'")))throw new AssertionError("Room migration failed");
+            js(web,"openCreateGroup();document.querySelector('#new-group-name').value='手机群聊';document.querySelector('#create-group-form button[type=submit]').click();");
+            waitJs(web,"state.conversations.some(c=>c.kind==='group'&&c.name==='手机群聊')");
+            waitJs(web,"document.querySelector('#edit-group')!==null");
+            js(web,"closeModal();document.querySelector('#message-input').value='安卓加密消息';sendMessage();");
+            waitJs(web,"[...state.messages.values()].some(m=>m.body==='安卓加密消息'&&m.encrypted)");
+            if(!"true".equals(js(web,"document.querySelector('#file-button')!==null && document.querySelector('#video-button')!==null && document.querySelector('#encryption-info')!==null")))throw new AssertionError("Phone controls missing");
+            try(InputStream in=getContext().getAssets().open("smoke.py")){
+                String code=new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
+                PyObject globals=Python.getInstance().getModule("builtins").callAttr("dict");
+                globals.put("server_url",base);globals.put("test_profile",new java.io.File(getTargetContext().getNoBackupFilesDir(),"instrumentation").getPath());
+                Python.getInstance().getModule("builtins").callAttr("exec",code,globals);
+                if(!"PASS".equals(globals.get("smoke_result").toString()))throw new AssertionError("Native crypto smoke failed");
+            }
+            result.putString("WeiyanSmoke","PASS");finish(Activity.RESULT_OK,result);
+        }catch(Throwable e){result.putString("WeiyanSmoke","FAIL: "+android.util.Log.getStackTraceString(e));finish(Activity.RESULT_CANCELED,result);}
+    }
+}

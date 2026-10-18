@@ -98,8 +98,18 @@ class ChatIntegration(unittest.TestCase):
         entry=[str(ROOT/'服务端'/'未言诗集服务端.exe')] if os.environ.get('WEIYAN_TEST_BINARIES') else [sys.executable,str(ROOT/'服务端'/'server.py')]
         if os.environ.get('WEIYAN_SERVER_EXECUTABLE'):
             entry=[os.environ['WEIYAN_SERVER_EXECUTABLE']]
-        process=subprocess.Popen(entry+['--headless','--host','127.0.0.1','--port',str(cls.server_port)],env=cls.env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        cls.wait_for(cls.server_base+'/api/health');return process
+        log=Path(cls.temp.name)/'server-process.log'
+        with log.open('ab') as output:
+            process=subprocess.Popen(entry+['--headless','--host','127.0.0.1','--port',str(cls.server_port)],env=cls.env,stdout=output,stderr=subprocess.STDOUT)
+        try:
+            cls.wait_for(cls.server_base+'/api/health')
+        except Exception:
+            print('Server process status:',process.poll(),'Output:',log.read_text(errors='replace'))
+            error=Path(cls.env['WEIYAN_DATA_DIR'])/'startup-error.txt'
+            if error.is_file():print(error.read_text(errors='replace'))
+            process.terminate();process.wait(timeout=15)
+            raise
+        return process
 
     @classmethod
     def start_client(cls,port,env):
@@ -109,7 +119,7 @@ class ChatIntegration(unittest.TestCase):
 
     @staticmethod
     def wait_for(url):
-        for _ in range(150):
+        for _ in range(600):
             try:
                 with urllib.request.urlopen(url,timeout=1):return
             except (OSError,urllib.error.URLError):time.sleep(.1)

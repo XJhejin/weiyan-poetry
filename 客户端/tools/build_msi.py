@@ -66,6 +66,7 @@ def build(wix):
     ET.SubElement(package, '{' + UI + '}WixUI', {'Id': 'WixUI_Minimal'})
     rtf = work / 'license.rtf'
     license_text = (ROOT / 'LICENSE').read_text('utf-8').replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}').replace('\n', '\\par\n')
+    license_text = ''.join(c if ord(c) < 128 else '\\u' + str(ord(c) if ord(c) < 32768 else ord(c) - 65536) + '?' for c in license_text)
     rtf.write_text('{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Segoe UI;}}\\f0\\fs18 ' + license_text + '}', encoding='ascii')
     add(package, 'WixVariable', Id='WixUILicenseRtf', Value=str(rtf))
     source = work / 'client.wxs'

@@ -1,0 +1,63 @@
+name: Android client APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10'
+      - uses: android-actions/setup-android@v3
+      - name: Build phone application and isolated test APK
+        working-directory: 客户端/android
+        run: gradle --console=plain :app:assembleRelease :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run actual Android UI and native encryption test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            python -m pip install -r 服务端/requirements.txt
+            WEIYAN_DATA_DIR="$RUNNER_TEMP/android-relay" python 服务端/server.py --headless --host 0.0.0.0 --port 23180 > "$RUNNER_TEMP/relay.log" 2>&1 &
+            sleep 3
+            adb install 客户端/android/app/build/outputs/apk/debug/app-debug.apk
+            adb install 客户端/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb shell am instrument -w -e server http://10.0.2.2:23180 com.weiyan.poetry.test/com.weiyan.poetry.SmokeInstrumentation | tee android-smoke.txt
+            grep -q 'WeiyanSmoke=PASS' android-smoke.txt
+            adb shell screencap -p /sdcard/weiyan-phone.png
+            adb pull /sdcard/weiyan-phone.png build-output/weiyan-phone.png
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p build-output
+          adb logcat -d > build-output/android-logcat.txt || true
+          cp android-smoke.txt build-output/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: weiyan-android
+          path: |
+            客户端/android/app/build/outputs/apk/release/app-release-unsigned.apk
+            build-output/
+          retention-days: 7
