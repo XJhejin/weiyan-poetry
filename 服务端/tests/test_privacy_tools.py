@@ -11,7 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 import urllib.request
 import urllib.error
 from http.cookiejar import CookieJar
@@ -30,6 +30,31 @@ from background import BackgroundAgent
 
 
 class BackgroundTests(unittest.TestCase):
+    def test_room_group_mute_and_disabled_receiver_suppress_native_alerts(self):
+        with tempfile.TemporaryDirectory(prefix='weiyan-notifications-') as folder:
+            bootstrap={'me': {'id':'self'},'server_id':'mute-test','offline':True}
+            context=SecureClient(folder,'http://127.0.0.1:23074','',bootstrap)
+            enabled=[True];notified=[]
+            agent=BackgroundAgent(SimpleNamespace(contexts={}),folder,lambda:context.url,notified.append,enabled=lambda:enabled[0])
+            agent.activate(context,bootstrap)
+            for cid in ['room:lobby','group:test']:
+                message={'sender':{'id':'peer'},'conversation_id':cid}
+                context.vault.put('ui','muted',[cid])
+                context.on_received(message)
+                self.assertEqual(notified,[])
+                self.assertEqual(context.vault.get('ui','muted'),[cid])
+                context.vault.put('ui','muted',[])
+                enabled[0]=False;context.on_received(message);self.assertEqual(notified,[])
+                enabled[0]=True;context.on_received(message);self.assertEqual(notified,[message]);notified.clear()
+
+    def test_android_background_polls_despite_suspended_webview_socket(self):
+        for enabled,force_socket,expected in [(True,True,1),(True,False,0),(False,True,0)]:
+            agent=BackgroundAgent(SimpleNamespace(contexts={}),'.',lambda:'',lambda message:None,enabled=lambda:enabled,poll_with_socket=lambda:force_socket)
+            agent.active=SimpleNamespace(active_sockets=1,receive=Mock())
+            with patch.object(agent.stop_event,'wait',side_effect=[False,True]):
+                agent.run()
+            self.assertEqual(agent.active.receive.call_count,expected)
+
     def test_protected_session_restore_mute_and_logout(self):
         with tempfile.TemporaryDirectory(prefix='weiyan-background-') as folder:
             bootstrap={'me': {'id': 'background-user'}, 'server_id': 'background-test', 'offline': True}

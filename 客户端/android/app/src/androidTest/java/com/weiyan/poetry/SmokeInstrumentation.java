@@ -35,6 +35,15 @@ public class SmokeInstrumentation extends Instrumentation {
             for(int i=0;i<200&&web==null;i++){AtomicReference<WebView> found=new AtomicReference<>();runOnMainSync(()->found.set(find(activity.getWindow().getDecorView())));web=found.get();if(web==null)Thread.sleep(250);}
             if(web==null)throw new AssertionError("Native application failed to start");
             waitJs(web,"typeof state !== 'undefined' && typeof chooseAttachment==='function' && typeof openGroupInfo==='function' && typeof openFriendRequests==='function'");
+            if(web.getSettings().supportZoom()||web.getSettings().getBuiltInZoomControls())throw new AssertionError("Phone pinch zoom must be disabled");
+            final WebView phoneWeb=web;
+            runOnMainSync(()->{
+                android.view.WindowInsets insets=phoneWeb.getRootWindowInsets();
+                if(insets==null)throw new AssertionError("Missing phone safe-area insets");
+                int safeTop=insets.getInsets(android.view.WindowInsets.Type.systemBars()|android.view.WindowInsets.Type.displayCutout()).top;
+                int spacing=Math.round(8*phoneWeb.getResources().getDisplayMetrics().density);
+                if(phoneWeb.getPaddingTop()<safeTop+spacing)throw new AssertionError("Chat overlaps status bar or display cutout");
+            });
             String base=args.getString("server","http://10.0.2.2:23180");
             js(web,"fetch('/desktop/config').then(r=>r.json()).then(c=>{window.defaultCorrect=c.server_url==='http://113.219.237.106:23074';return post('/desktop/config',{server_url:'"+base+"'});}).then(()=>{window.configured=true;})");
             waitJs(web,"window.configured===true");
@@ -47,9 +56,18 @@ public class SmokeInstrumentation extends Instrumentation {
             waitJs(web,"state.me.avatar.startsWith('data:image/jpeg;base64,') && !document.querySelector('#modal').open");
             if(!"true".equals(js(web,"document.querySelector('#my-avatar .custom-avatar')!==null")))throw new AssertionError("Personal avatar did not synchronize");
             if(!"true".equals(js(web,"state.conversations.filter(c=>c.kind==='room').length===1 && state.conversations.find(c=>c.kind==='room').name==='-扉页-'")))throw new AssertionError("Room migration failed");
+            js(web,"document.querySelector('#conversation-info').click();document.querySelector('#conversation-mute').click();");
+            waitJs(web,"document.querySelector('#conversation-mute')?.getAttribute('aria-checked')==='true' && stored('muted',[]).includes('room:lobby')");
+            js(web,"closeModal();document.querySelector('#conversation-info').click();");
+            waitJs(web,"document.querySelector('#conversation-mute')?.getAttribute('aria-checked')==='true'");
+            js(web,"document.querySelector('#conversation-mute').click();");
+            waitJs(web,"document.querySelector('#conversation-mute')?.getAttribute('aria-checked')==='false'");
+            js(web,"closeModal();");
             js(web,"openCreateGroup();document.querySelector('#new-group-name').value='手机群聊';document.querySelector('#create-group-form button[type=submit]').click();");
             waitJs(web,"state.conversations.some(c=>c.kind==='group'&&c.name==='手机群聊')");
             waitJs(web,"document.querySelector('#edit-group')!==null");
+            js(web,"document.querySelector('#conversation-mute').click();");
+            waitJs(web,"document.querySelector('#conversation-mute')?.getAttribute('aria-checked')==='true' && stored('muted',[]).includes(state.active)");
             js(web,"closeModal();document.querySelector('#message-input').value='安卓加密消息';sendMessage();");
             waitJs(web,"[...state.messages.values()].some(m=>m.body==='安卓加密消息'&&m.encrypted)");
             if(!"true".equals(js(web,"document.querySelector('#file-button')!==null && document.querySelector('#video-button')!==null && document.querySelector('#encryption-info')!==null")))throw new AssertionError("Phone controls missing");
@@ -62,7 +80,7 @@ public class SmokeInstrumentation extends Instrumentation {
                 runOnMainSync(()->activity.moveTaskToBack(true));
                 Thread.sleep(750);
                 Python.getInstance().getModule("builtins").callAttr("exec",
-                    "from mobile import _gateway\n_gateway.background.activate(b, bob.call('/api/bootstrap'))\na.send({'conversation_id':cid,'body':'notification-private-body-6628','client_id':'notify-'+secrets.token_hex(8)})",globals);
+                    "from mobile import _gateway\n_gateway.background.activate(b, bob.call('/api/bootstrap'))\nb.active_sockets=1\na.send({'conversation_id':cid,'body':'notification-private-body-6628','client_id':'notify-'+secrets.token_hex(8)})",globals);
                 android.app.NotificationManager manager=(android.app.NotificationManager)getTargetContext().getSystemService(android.content.Context.NOTIFICATION_SERVICE);
                 boolean notified=false;
                 for(int i=0;i<60&&!notified;i++){
@@ -74,7 +92,27 @@ public class SmokeInstrumentation extends Instrumentation {
                     if(!notified)Thread.sleep(250);
                 }
                 if(!notified)throw new AssertionError("No encrypted message notification while Activity was in background");
+                NotificationService.clearUnread();
+                Python.getInstance().getModule("builtins").callAttr("exec",
+                    "b.vault.put('ui','muted',['room:lobby'])\nmuted_sent=a.send({'conversation_id':'room:lobby','body':'muted-room-marker','client_id':'mute-'+secrets.token_hex(8)})",globals);
+                boolean receivedMuted=false;
+                for(int i=0;i<60&&!receivedMuted;i++){
+                    receivedMuted=Python.getInstance().getModule("builtins").callAttr("eval","any(m['body']=='muted-room-marker' for m in b.vault.messages('room:lobby'))",globals).toBoolean();
+                    if(!receivedMuted)Thread.sleep(250);
+                }
+                if(!receivedMuted)throw new AssertionError("Muted room message was not received and stored");
+                for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2)throw new AssertionError("Muted room triggered a notification");
+                getTargetContext().startService(new Intent(getTargetContext(),NotificationService.class).setAction("stop"));
+                for(int i=0;i<40&&NotificationService.isRunning();i++)Thread.sleep(100);
+                if(NotificationService.isEnabled()||NotificationService.isRunning())throw new AssertionError("Explicit stop must disable background reception");
+                new BackgroundReceiver().onReceive(getTargetContext(),new Intent(Intent.ACTION_MY_PACKAGE_REPLACED));
+                Thread.sleep(250);
+                if(NotificationService.isRunning())throw new AssertionError("Upgrade receiver ignored explicit stop preference");
                 getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+                Thread.sleep(750);
+                NotificationService.setEnabled(true);
+                for(int i=0;i<40&&!NotificationService.isRunning();i++)Thread.sleep(100);
+                if(!NotificationService.isEnabled()||!NotificationService.isRunning())throw new AssertionError("User could not resume background reception");
             }
             result.putString("WeiyanSmoke","PASS");finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("WeiyanSmoke","FAIL: "+android.util.Log.getStackTraceString(e));finish(Activity.RESULT_CANCELED,result);}

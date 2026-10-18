@@ -7,6 +7,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import secrets
+import ssl
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+import certifi
 
 from nacl.signing import VerifyKey
 from nacl.exceptions import BadSignatureError
@@ -23,6 +25,26 @@ from release_config import VERSION, REPOSITORY, RELEASE_PUBLIC_KEY
 
 MAX_DOWNLOAD = 250 * 1024 * 1024
 MANIFEST_DOMAIN = b"WeiyanPoetry/release/v1\0"
+
+
+def github_tls_context():
+    # A frozen macOS Python cannot rely on the build machine's OpenSSL CA path.
+    # Keep native/custom trust roots and add the bundled public trust store.
+    context = ssl.create_default_context()
+    context.load_verify_locations(cafile=certifi.where())
+    return context
+
+
+def diagnose_github_update(report_path, profile):
+    """Probe the bundled TLS trust store and signed public manifest without installing."""
+    try:
+        result = Updater('server', profile).check()
+        result = {'status': 'ok', 'current': VERSION, 'latest': result['latest'],
+                  'trusted_certificates': github_tls_context().cert_store_stats()['x509_ca']}
+    except Exception as error:
+        result = {'status': 'error', 'message': str(error)}
+    Path(report_path).write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
+    return 0 if result['status'] == 'ok' else 1
 
 
 def windows_runtime_environment():
@@ -145,7 +167,7 @@ class Updater:
         binary = '/releases/assets/' in url or 'api.github.com' not in url
         req = urllib.request.Request(url, headers={"User-Agent": "WeiyanPoetry/" + VERSION, "Accept": "application/octet-stream" if binary else "application/vnd.github+json", 'X-GitHub-Api-Version': '2022-11-28'})
         try:
-            with urllib.request.urlopen(req, timeout=25) as response:
+            with urllib.request.urlopen(req, timeout=25, context=github_tls_context()) as response:
                 raw = response.read(maximum + 1)
                 if len(raw) > maximum:
                     raise ValueError("更新信息大小异常。")
@@ -157,24 +179,35 @@ class Updater:
                 raise ValueError("GitHub 访问频率受限，请稍后重试。") from error
             raise ValueError("GitHub 暂时无法提供更新。") from error
         except (OSError, urllib.error.URLError) as error:
-            raise ValueError("暂时无法连接 GitHub，请检查网络后重试。") from error
+            reason = getattr(error, 'reason', error)
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                raise ValueError("GitHub HTTPS 证书验证失败。请检查系统时间、代理证书，或安装最新完整安装包。") from error
+            raise ValueError("暂时无法连接 GitHub，请检查网络或代理设置后重试。") from error
 
     def check(self):
         if REPOSITORY.startswith("PENDING/"):
             return {**self.info(), "available": False, "latest": None, "message": "项目正在准备首次 GitHub 发布。"}
-        release = json.loads(self.fetch("https://api.github.com/repos/" + REPOSITORY + "/releases/latest"))
+        try:
+            release = json.loads(self.fetch("https://api.github.com/repos/" + REPOSITORY + "/releases/latest"))
+            manifest_asset = next((a for a in release.get('assets', []) if a['name'] == 'weiyan-update.json'), None)
+            if not manifest_asset:
+                raise ValueError('该版本缺少签名更新清单。')
+            manifest = json.loads(self.fetch(manifest_asset['url'], 128 * 1024))
+        except (ValueError, OSError) as api_error:
+            try:
+                manifest = json.loads(self.fetch('https://github.com/' + REPOSITORY + '/releases/latest/download/weiyan-update.json', 128 * 1024))
+                signed = verify_manifest(manifest)
+                release = {'tag_name': 'v' + signed['version'], 'assets': [dict(a, size=a['bytes'], url='https://github.com/' + REPOSITORY + '/releases/download/v' + signed['version'] + '/' + a['name']) for a in signed['assets'].values()], 'body': '已通过 GitHub Releases 备用路径获取签名更新清单。'}
+            except (ValueError, OSError, KeyError, TypeError) as fallback_error:
+                raise ValueError(str(api_error) + ' GitHub Releases 备用连接也未成功。') from fallback_error
         if release.get("draft") or release.get("prerelease"):
             raise ValueError("当前发布不是正式版本。")
         assets = {asset["name"]: asset for asset in release.get("assets", [])}
-        manifest_asset = assets.get("weiyan-update.json")
-        if not manifest_asset:
-            raise ValueError("该版本缺少签名更新清单，暂时无法安装。")
-        manifest = json.loads(self.fetch(manifest_asset["url"], 128 * 1024))
         signed = verify_manifest(manifest)
         if release.get("tag_name") != "v" + signed["version"]:
             raise ValueError("版本标签与签名清单不一致。")
         artifact = signed["assets"].get(self.package_key)
-        if not isinstance(artifact, dict) or not re.fullmatch(r"[0-9a-f]{64}", artifact.get("sha256", "")) or not isinstance(artifact.get("bytes"), int) or not 0 < artifact["bytes"] <= MAX_DOWNLOAD:
+        if not isinstance(artifact, dict) or not re.fullmatch(r"[A-Za-z0-9_.-]+", artifact.get('name', '')) or not re.fullmatch(r"[0-9a-f]{64}", artifact.get("sha256", "")) or not isinstance(artifact.get("bytes"), int) or not 0 < artifact["bytes"] <= MAX_DOWNLOAD:
             raise ValueError("更新文件校验信息无效。")
         asset = assets.get(artifact["name"])
         if not asset or asset.get("size") != artifact["bytes"]:
@@ -203,12 +236,12 @@ class Updater:
             folder.mkdir(parents=True)
             artifact = self.release["artifact"]
             url = self.release["asset"]["url"]
-            if not url.startswith("https://api.github.com/repos/" + REPOSITORY + "/releases/assets/"):
+            if not (url.startswith("https://api.github.com/repos/" + REPOSITORY + "/releases/assets/") or url.startswith('https://github.com/' + REPOSITORY + '/releases/download/v' + self.release['version'] + '/')):
                 raise ValueError("更新文件来源与项目不一致。")
             req = urllib.request.Request(url, headers={"User-Agent": "WeiyanPoetry/" + VERSION, 'Accept': 'application/octet-stream', 'X-GitHub-Api-Version': '2022-11-28'})
             extension = {'client_android': '.apk', 'client_windows_msi': '.msi', 'server_macos_arm64': '.dmg'}.get(self.package_key, '.zip')
             archive, digest, size = folder / ('package' + extension), hashlib.sha256(), 0
-            with urllib.request.urlopen(req, timeout=30) as response, archive.open("xb") as file:
+            with urllib.request.urlopen(req, timeout=30, context=github_tls_context()) as response, archive.open("xb") as file:
                 while True:
                     chunk = response.read(128 * 1024)
                     if not chunk:

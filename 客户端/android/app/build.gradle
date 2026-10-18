@@ -28,7 +28,7 @@ android {
 chaquopy {
     defaultConfig {
         version '3.12'
-        pip { install 'PyNaCl==1.5.0'; install 'simple-websocket==1.1.0' }
+        pip { install 'PyNaCl==1.5.0'; install 'simple-websocket==1.1.0'; install 'certifi==2026.10.18' }
     }
     sourceSets { main { srcDirs = [layout.buildDirectory.dir('generated/python').get().asFile] } }
 }

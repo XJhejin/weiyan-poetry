@@ -29,7 +29,7 @@ def build():
     run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--windowed', '--onedir',
          '--name', name, '--distpath', dist, '--workpath', work / 'pyinstaller', '--specpath', work,
          '--target-arch', 'arm64', '--osx-bundle-identifier', 'com.weiyan.poetry.server', '--icon', icon,
-         '--add-data', str(ROOT / '服务端/admin_ui') + ':admin_ui', '--collect-all', 'nacl',
+         '--add-data', str(ROOT / '服务端/admin_ui') + ':admin_ui', '--collect-all', 'nacl', '--collect-data', 'certifi',
          '--collect-all', 'webview', '--hidden-import', 'simple_websocket', '--hidden-import', '_cffi_backend', ROOT / '服务端/server.py'])
     app = dist / (name + '.app')
     info_file = app / 'Contents/Info.plist'

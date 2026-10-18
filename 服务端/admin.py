@@ -1,10 +1,10 @@
 """Loopback-only administrative UI and lifecycle controller for the relay."""
 import hmac
+import errno
 import http.cookies
 import json
 from pathlib import Path
 import secrets
-import socket
 import sys
 import threading
 import time
@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 import webbrowser
 from update import Updater
+from listening import listen_address, listen_port, connection_addresses
 
 
 class Controller:
@@ -26,14 +27,19 @@ class Controller:
         with self.lock:
             if self.server:
                 return
-            host = host if host is not None else self.host
-            port = int(port if port is not None else self.port)
-            if host not in ("0.0.0.0", "127.0.0.1") or not 1 <= port <= 65535:
-                raise ValueError("请选择有效的监听地址和端口。")
+            try:
+                host = listen_address(host if host is not None else self.host)
+                port = listen_port(port if port is not None else self.port)
+            except ValueError as error:
+                self.error = str(error)
+                raise
             try:
                 server = self.core.ChatServer((host, port), self.core.Handler)
             except OSError as error:
-                self.error = "端口已被占用或无法监听，请更换端口后重试。"
+                if error.errno == errno.EADDRNOTAVAIL or getattr(error, 'winerror', None) == 10049:
+                    self.error = '该监听地址不属于本机，请填写本机 IP，或选择 0.0.0.0 监听全部 IPv4 网卡。'
+                else:
+                    self.error = "端口已被占用或无法监听，请更换端口后重试。"
                 raise ValueError(self.error) from error
             server.stopping = threading.Event()
             self.server, self.host, self.port = server, host, port
@@ -65,16 +71,10 @@ class Controller:
         online = {s["device_id"] for s in sessions}
         for device in devices:
             device["online"] = device["id"] in online
-        addresses = []
-        if self.host == "0.0.0.0":
-            try:
-                addresses = [f"http://{addr}:{self.port}" for addr in sorted(set(socket.gethostbyname_ex(socket.gethostname())[2])) if not addr.startswith("127.") and ":" not in addr]
-            except OSError:
-                pass
         return {"running": bool(self.server), "host": self.host, "port": self.port, "uptime": int(time.time() - self.started) if self.started else 0,
                 "error": self.error or getattr(self.server, "last_error", ""), "accounts": accounts, "devices": devices, "sessions": sessions,
                 "online": len({s["user_id"] for s in sessions}), "queued": total, "queue_bytes": size, "settings": settings, "privacy": privacy,
-                "addresses": [f"http://127.0.0.1:{self.port}"] + addresses, "data_dir": str(self.core.DATA)}
+                "addresses": connection_addresses(self.host, self.port), "data_dir": str(self.core.DATA)}
 
     def action(self, payload):
         action = payload.get("action")

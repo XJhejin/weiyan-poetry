@@ -15,6 +15,7 @@ import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -47,6 +48,9 @@ public class MainActivity extends Activity {
         active = this;
         getWindow().setStatusBarColor(Color.rgb(255,248,250));
         getWindow().setNavigationBarColor(Color.rgb(255,248,250));
+        if(Build.VERSION.SDK_INT>=30)getWindow().setDecorFitsSystemWindows(false);
+        else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        if(Build.VERSION.SDK_INT>=28){WindowManager.LayoutParams attributes=getWindow().getAttributes();attributes.layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;getWindow().setAttributes(attributes);}
         TextView splash = new TextView(this);
         splash.setText("未言诗集\n\n正在准备本机加密空间…");
         splash.setTextColor(Color.rgb(158,105,129));splash.setTextSize(20);splash.setGravity(17);splash.setBackgroundColor(Color.rgb(255,248,250));
@@ -75,6 +79,9 @@ public class MainActivity extends Activity {
         web.setBackgroundColor(Color.rgb(255,248,250));
         WebSettings settings = web.getSettings();
         settings.setJavaScriptEnabled(true);
+        settings.setSupportZoom(false);
+        settings.setBuiltInZoomControls(false);
+        settings.setDisplayZoomControls(false);
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(true);
@@ -115,10 +122,20 @@ public class MainActivity extends Activity {
             startActivityForResult(intent,102);
         });
         setContentView(web);
-        if (Build.VERSION.SDK_INT >= 35) web.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);return WindowInsets.CONSUMED;});
+        final int topSpacing=Math.round(8*getResources().getDisplayMetrics().density);
+        web.setOnApplyWindowInsetsListener((v,insets)->{
+            int left,top,right,bottom;
+            if(Build.VERSION.SDK_INT>=30){android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout()|WindowInsets.Type.ime());left=safe.left;top=safe.top;right=safe.right;bottom=safe.bottom;}
+            else{
+                left=insets.getSystemWindowInsetLeft();top=insets.getSystemWindowInsetTop();right=insets.getSystemWindowInsetRight();bottom=insets.getSystemWindowInsetBottom();
+                if(Build.VERSION.SDK_INT>=28&&insets.getDisplayCutout()!=null){android.view.DisplayCutout cutout=insets.getDisplayCutout();left=Math.max(left,cutout.getSafeInsetLeft());top=Math.max(top,cutout.getSafeInsetTop());right=Math.max(right,cutout.getSafeInsetRight());bottom=Math.max(bottom,cutout.getSafeInsetBottom());}
+            }
+            v.setPadding(left,top+topSpacing,right,bottom);
+            return Build.VERSION.SDK_INT>=30?WindowInsets.CONSUMED:insets.consumeSystemWindowInsets();
+        });
+        web.requestApplyInsets();
         web.loadUrl(url);
-        Intent service=new Intent(this,NotificationService.class);
-        if(Build.VERSION.SDK_INT>=26)startForegroundService(service);else startService(service);
+        NotificationService.startIfEnabled(this);
         requestNotifications();
     }
 
@@ -178,6 +195,15 @@ public class MainActivity extends Activity {
         pendingApk=null;
     }
     public static void requestNotifications(){MainActivity activity=active;if(activity!=null&&Build.VERSION.SDK_INT>=33&&activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)activity.runOnUiThread(()->activity.requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},104));}
+    public static boolean batteryUnrestricted(){MainActivity activity=active;return activity!=null&&((android.os.PowerManager)activity.getSystemService(POWER_SERVICE)).isIgnoringBatteryOptimizations(activity.getPackageName());}
+    public static void openBackgroundSettings(){
+        MainActivity activity=active;
+        if(activity==null)throw new IllegalStateException("请先打开客户端。");
+        activity.runOnUiThread(()->{
+            try{activity.startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+activity.getPackageName())));}
+            catch(RuntimeException error){Toast.makeText(activity,"请在系统设置中打开未言诗集的电池与后台运行设置。",Toast.LENGTH_LONG).show();}
+        });
+    }
     @Override protected void onResume(){super.onResume();isForeground=true;NotificationService.clearUnread();}
     @Override protected void onPause(){super.onPause();isForeground=false;CookieManager.getInstance().flush();}
     @Override public void onBackPressed(){if(web==null){super.onBackPressed();return;}web.evaluateJavascript("window.weiyanBack ? window.weiyanBack() : false",answer->{if(!"true".equals(answer))moveTaskToBack(true);});}

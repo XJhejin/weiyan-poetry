@@ -40,6 +40,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: |
+            adb shell cmd overlay enable com.android.internal.display.cutout.emulation.tall
             python -m pip install -r 服务端/requirements.txt
             WEIYAN_DATA_DIR="$RUNNER_TEMP/android-relay" python 服务端/server.py --headless --host 0.0.0.0 --port 23180 > "$RUNNER_TEMP/relay.log" 2>&1 &
             sleep 3

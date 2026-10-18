@@ -8,12 +8,13 @@ from secure import SecureClient, protect, RemoteError
 
 
 class BackgroundAgent:
-    def __init__(self, gateway, profile, server_url, notify):
+    def __init__(self, gateway, profile, server_url, notify, enabled=lambda: True, poll_with_socket=lambda: False):
         self.gateway, self.profile, self.server_url, self.notify = gateway, Path(profile), server_url, notify
         self.active = None
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.saved = self.profile / 'background-session.dpapi'
+        self.enabled, self.poll_with_socket = enabled, poll_with_socket
 
     def start(self):
         try:
@@ -42,7 +43,7 @@ class BackgroundAgent:
         with self.lock:
             if self.active is not context or message['sender']['id'] == context.me['id']:
                 return
-        if message['conversation_id'] in context.vault.get('ui', 'muted', []):
+        if not self.enabled() or message['conversation_id'] in context.vault.get('ui', 'muted', []):
             return
         try:
             self.notify(message)
@@ -58,7 +59,7 @@ class BackgroundAgent:
         while not self.stop_event.wait(2):
             with self.lock:
                 context = self.active
-            if context is None or getattr(context, 'active_sockets', 0):
+            if not self.enabled() or context is None or (getattr(context, 'active_sockets', 0) and not self.poll_with_socket()):
                 continue
             try:
                 context.receive()

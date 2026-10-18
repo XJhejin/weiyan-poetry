@@ -144,6 +144,18 @@ class Gateway(BaseHTTPRequestHandler):
                         from java import jclass
                         jclass('com.weiyan.poetry.MainActivity').requestNotifications()
                 return self.json_response({'enabled': CONFIG.get('native_notifications', True), 'native': bool(getattr(self.server, 'background', None)), 'platform': os.environ.get('WEIYAN_PLATFORM', 'windows')})
+            if path == '/desktop/background' and os.environ.get('WEIYAN_PLATFORM') == 'android':
+                from java import jclass
+                service, activity = jclass('com.weiyan.poetry.NotificationService'), jclass('com.weiyan.poetry.MainActivity')
+                if self.command == 'POST':
+                    data = self.read_json()
+                    if data.get('action') == 'settings':
+                        activity.openBackgroundSettings()
+                    elif isinstance(data.get('enabled'), bool):
+                        service.setEnabled(data['enabled'])
+                    else:
+                        raise ValueError('后台接收设置格式无效。')
+                return self.json_response({'enabled': service.isEnabled(), 'running': service.isRunning(), 'battery_unrestricted': activity.batteryUnrestricted()})
             if path == '/desktop/tray-settings' and self.command == 'POST':
                 self.read_json()
                 if sys.platform != 'win32' or getattr(self.server, 'browser_mode', False):
@@ -271,6 +283,9 @@ class Gateway(BaseHTTPRequestHandler):
                 values = payload.get("values", {})
                 if not isinstance(values, dict) or any(k not in {"outbox", "drafts", "saved", "pins", "muted", "notifications", "lastConversation"} for k in values):
                     raise ValueError("本机设置格式不正确。")
+                if 'muted' in values and (not isinstance(values['muted'], list) or len(values['muted']) > 10000
+                        or any(not isinstance(cid, str) or not 1 <= len(cid) <= 200 for cid in values['muted'])):
+                    raise ValueError("免打扰设置格式不正确。")
                 for key, value in values.items():
                     context.vault.put("ui", key, value)
             return self.json_response({"ok": True})
@@ -394,6 +409,13 @@ class Gateway(BaseHTTPRequestHandler):
 
     def websocket_proxy(self):
         from simple_websocket import Server, Client, ConnectionClosed, ConnectionError
+        def receiver_paused():
+            if os.environ.get('WEIYAN_PLATFORM') != 'android':
+                return False
+            from java import jclass
+            return not jclass('com.weiyan.poetry.MainActivity').isForeground and not jclass('com.weiyan.poetry.NotificationService').isEnabled()
+        if receiver_paused():
+            return self.json_response({'error': '后台接收已停止。'}, 503)
         context, _ = self.context()
         class PortAwareClient(Client):
             def handshake(self):
@@ -443,6 +465,8 @@ class Gateway(BaseHTTPRequestHandler):
                     else:
                         local.send(packet)
                 if time.monotonic() - polled > 1.5:
+                    if receiver_paused():
+                        break
                     for message in context.receive():
                         local.send(json.dumps({"type": "message", "message": message}, ensure_ascii=False))
                     if context.blocked:

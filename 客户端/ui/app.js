@@ -14,7 +14,30 @@ function stored(name,fallback={}) {return localPreferences[name]??fallback;}
 function store(name,value) {
   localPreferences[name]=value;
   const body=JSON.stringify({values:{[name]:value}});
-  storageWrites=storageWrites.catch(()=>{}).then(()=>fetch('/desktop/storage',{method:'POST',credentials:'same-origin',keepalive:body.length<60000,headers:{'Content-Type':'application/json','X-Weiyan-Client':'web'},body})).then(r=>{if(!r.ok)throw new Error('本机加密保存失败');}).catch(()=>{toast('本机保存尚未完成，请保持窗口开启后重试。');});
+  storageWrites=storageWrites.catch(()=>{}).then(()=>fetch('/desktop/storage',{method:'POST',credentials:'same-origin',keepalive:body.length<60000,headers:{'Content-Type':'application/json','X-Weiyan-Client':'web'},body})).then(r=>{if(!r.ok)throw new Error('本机加密保存失败');return true;}).catch(()=>{toast('本机保存尚未完成，请保持窗口开启后重试。');return false;});
+  return storageWrites;
+}
+function conversationNotificationRow(cid) {
+  const muted=stored('muted',[]).includes(cid);
+  return `<div class="settings-row"><div>消息免打扰<p>开启后仍接收消息并保留未读标记，不发出系统通知或托盘提醒。仅对本机当前账号生效。</p></div><button class="notification-toggle${muted?' on':''}" id="conversation-mute" role="switch" aria-label="消息免打扰" aria-checked="${muted}" data-mute-conversation="${escape(cid)}"></button></div>`;
+}
+async function setConversationMuted(cid,enabled) {
+  const before=[...stored('muted',[])];
+  const next=enabled?[...new Set([...before,cid])]:before.filter(x=>x!==cid);
+  if(!await store('muted',next)){localPreferences.muted=before;return false;}
+  renderList();
+  toast(enabled?'已开启免打扰，未读标记仍会保留。':'已开启提醒。');
+  return true;
+}
+function bindConversationMute() {
+  const button=$('#conversation-mute');
+  if(!button)return;
+  button.onclick=async()=>{
+    button.disabled=true;
+    const cid=button.dataset.muteConversation,enabled=!stored('muted',[]).includes(cid);
+    if(await setConversationMuted(cid,enabled)){button.classList.toggle('on',enabled);button.setAttribute('aria-checked',String(enabled));}
+    button.disabled=false;
+  };
 }
 async function migrateLocalPreferences(data) {
   localPreferences=data.local_storage||{};
@@ -245,7 +268,7 @@ async function openSecurity() {
   }catch(e){$('#modal-body').innerHTML=`<p>${escape(e.message)}</p>`;}
 }
 async function openUpdates() {
-  modal('软件更新',`<div class="client-update-brand"><img src="/assets/logo.svg" alt="未言诗集"><div><b>未言诗集</b><p>客户端 · <span id="update-current">2.1.1</span></p></div></div><div class="info-box">从项目 GitHub Releases 下载正式版本。安装前会校验发布签名与文件完整性。</div><p id="client-update-state">点击检查，查看是否有可用更新。</p><div id="client-update-details" hidden><h3 id="client-update-version"></h3><pre id="client-update-notes"></pre></div><p id="client-update-repo" class="muted"></p><p id="client-update-progress" class="info-box" hidden></p><div class="modal-actions"><button class="text-button" id="client-check-update">检查更新</button><button class="primary" id="client-install-update" hidden>下载并重启安装</button></div><p class="muted">安装后会重新打开客户端，本机加密记录与设置会保留。</p>`);
+  modal('软件更新',`<div class="client-update-brand"><img src="/assets/logo.svg" alt="未言诗集"><div><b>未言诗集</b><p>客户端 · <span id="update-current">2.1.2</span></p></div></div><div class="info-box">从项目 GitHub Releases 下载正式版本。安装前会校验发布签名与文件完整性。</div><p id="client-update-state">点击检查，查看是否有可用更新。</p><div id="client-update-details" hidden><h3 id="client-update-version"></h3><pre id="client-update-notes"></pre></div><p id="client-update-repo" class="muted"></p><p id="client-update-progress" class="info-box" hidden></p><div class="modal-actions"><button class="text-button" id="client-check-update">检查更新</button><button class="primary" id="client-install-update" hidden>下载并重启安装</button></div><p class="muted">安装后会重新打开客户端，本机加密记录与设置会保留。</p>`);
   const config=await api('/desktop/update/info');if(!$('#update-current'))return;$('#update-current').textContent=config.current;$('#client-update-repo').textContent=config.repository;
   $('#client-check-update').onclick=async()=>{const b=$('#client-check-update');b.disabled=true;$('#client-update-state').textContent='正在连接 GitHub 检查更新…';try{const info=await post('/desktop/update/check');if(!$('#client-update-state'))return;$('#client-update-state').textContent=info.message;$('#client-update-details').hidden=!info.latest;$('#client-update-version').textContent=info.latest?'版本 '+info.latest:'';$('#client-update-notes').textContent=info.notes||'';$('#client-install-update').hidden=!info.available;}catch(e){if($('#client-update-state'))$('#client-update-state').textContent=e.message;}finally{b.disabled=false;}};
   $('#client-install-update').onclick=async()=>{const b=$('#client-install-update');b.disabled=true;$('#client-update-progress').hidden=false;$('#client-update-progress').textContent='正在下载并验证更新，请保持窗口开启…';try{await storageWrites;await post('/desktop/update/install');
@@ -331,7 +354,7 @@ function messageAction(action,id,event) {
 async function copyText(text) {try{await navigator.clipboard.writeText(text);toast('已复制，可以分享这份温柔了。');}catch{const input=document.createElement('textarea');input.value=text;document.body.append(input);input.select();const ok=document.execCommand('copy');input.remove();toast(ok?'已复制。':'可以选中文字后，按 Ctrl+C 复制。');}}
 function conversationContext(cid,event) {
   const pins=stored('pins',['room:lobby']),muted=stored('muted',[]);
-  showContext([{icon:'pin',label:pins.includes(cid)?'取消置顶':'置顶这个会话',action:()=>{store('pins',pins.includes(cid)?pins.filter(x=>x!==cid):[...pins,cid]);renderList();}},{icon:'bell',label:muted.includes(cid)?'开启消息提醒':'消息免打扰',action:()=>{store('muted',muted.includes(cid)?muted.filter(x=>x!==cid):[...muted,cid]);renderList();toast(muted.includes(cid)?'已开启提醒。':'已开启免打扰，未读标记仍会保留。');}}],event.clientX,event.clientY);
+  showContext([{icon:'pin',label:pins.includes(cid)?'取消置顶':'置顶这个会话',action:()=>{store('pins',pins.includes(cid)?pins.filter(x=>x!==cid):[...pins,cid]);renderList();}},{icon:'bell',label:muted.includes(cid)?'开启消息提醒':'消息免打扰',action:()=>setConversationMuted(cid,!stored('muted',[]).includes(cid))}],event.clientX,event.clientY);
 }
 async function chooseImage(file) {
   if(!file)return;if(!['image/png','image/jpeg','image/gif','image/webp'].includes(file.type)){toast('支持 PNG、JPG、GIF 和 WebP 图片。');return;}if(file.size>5*1024*1024){toast('图片需要小于 5 MB，换一张轻一点的吧。');return;}
@@ -361,7 +384,7 @@ $('#auth-form').onsubmit=async event=>{event.preventDefault();const button=$('.a
 $('#guest-login').onclick=async()=>{$('#guest-login').disabled=true;try{await post('/api/guest',{nickname:'掇花者'});await bootstrap({initial:true});connectEvents();toast('欢迎来坐坐。点击左下角头像，可以设置自己的名字。');}catch(error){$('#auth-error').textContent=error.message;}finally{$('#guest-login').disabled=false;}};
 $('#auth-updates').onclick=openUpdates;$('#auth-connect').onclick=openConnection;$('#new-chat').onclick=openFriends;$('#my-avatar').onclick=()=>openProfile();$('#settings-button').onclick=openSettings;$('#search-messages').onclick=openSearch;
 $('#encryption-info').onclick=openSecurity;$('#privacy-card').onclick=openSecurity;
-$('#conversation-info').onclick=()=>{const c=currentConversation();if(c.kind==='direct'){openProfile(c.peer);return;}modal(c.name,`<div class="profile-heading">${avatar(c)}<div><h3>${escape(c.name)}</h3><p>公共聊天室 · ${state.online.length} 位朋友在线</p></div></div><p>${escape(c.description)}</p><div class="info-box">所有连接到同一服务端的朋友都能参与这个聊天室。<br>友善地分享日常，也请尊重彼此的生活和隐私。</div><h3 style="font-size:12px">此刻在这里</h3><div class="modal-results">${state.online.map(id=>state.users.get(id)).filter(Boolean).map(u=>`<div class="user-result">${avatar(u)}<div><b>${escape(u.nickname)}</b><p>${escape(u.bio||'愿未尽之言，皆有回响。')}</p></div>${u.id!==state.me.id?`<button data-peer="${u.id}">私聊</button>`:'<span style="font-size:10px;color:#b99daa">我</span>'}</div>`).join('')}</div>`);};
+$('#conversation-info').onclick=()=>{const c=currentConversation();if(c.kind==='direct'){openProfile(c.peer);return;}modal(c.name,`<div class="profile-heading">${avatar(c)}<div><h3>${escape(c.name)}</h3><p>公共聊天室 · ${state.online.length} 位朋友在线</p></div></div><p>${escape(c.description)}</p><div class="info-box">所有连接到同一服务端的朋友都能参与这个聊天室。<br>友善地分享日常，也请尊重彼此的生活和隐私。</div>${conversationNotificationRow(c.id)}<h3 style="font-size:12px">此刻在这里</h3><div class="modal-results">${state.online.map(id=>state.users.get(id)).filter(Boolean).map(u=>`<div class="user-result">${avatar(u)}<div><b>${escape(u.nickname)}</b><p>${escape(u.bio||'愿未尽之言，皆有回响。')}</p></div>${u.id!==state.me.id?`<button data-peer="${u.id}">私聊</button>`:'<span style="font-size:10px;color:#b99daa">我</span>'}</div>`).join('')}</div>`);bindConversationMute();};
 $$('[data-view]').forEach(button=>button.onclick=()=>{state.view=button.dataset.view;$('#conversation-search').value='';renderList();});
 $$('[data-list]').forEach(button=>button.onclick=()=>{state.filter=button.dataset.list;$$('[data-list]').forEach(b=>b.classList.toggle('active',b===button));renderList();});
 $('#conversation-search').oninput=renderList;$('#send-button').onclick=sendMessage;

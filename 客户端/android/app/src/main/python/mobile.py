@@ -57,7 +57,11 @@ def start(profile, ui):
         if main.CONFIG.get('native_notifications', True):
             from java import jclass
             jclass('com.weiyan.poetry.NotificationService').notifyMessage(message['conversation_id'])
-    _gateway.background = BackgroundAgent(_gateway, main.PROFILE, lambda: main.CONFIG['server_url'], notify)
+    from java import jclass
+    service = jclass('com.weiyan.poetry.NotificationService')
+    activity = jclass('com.weiyan.poetry.MainActivity')
+    _gateway.background = BackgroundAgent(_gateway, main.PROFILE, lambda: main.CONFIG['server_url'], notify,
+        enabled=lambda: service.isEnabled(), poll_with_socket=lambda: not activity.isForeground)
     _gateway.background.start()
     threading.Thread(target=_gateway.serve_forever, daemon=True).start()
     _url = f'http://127.0.0.1:{_gateway.server_port}/?local_key={token}'

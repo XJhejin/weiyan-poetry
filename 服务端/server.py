@@ -29,6 +29,7 @@ import groups
 import friends
 from avatars import COLORS, normalize_avatar
 from release_config import VERSION
+from listening import listen_address, listen_port
 
 ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 DEFAULT_DATA = Path.home() / "Library/Application Support/WeiyanPoetry/server" if sys.platform == 'darwin' else ROOT / "data"
@@ -602,6 +603,17 @@ class ChatServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def __init__(self, server_address, handler):
+        host, port = listen_address(server_address[0]), listen_port(server_address[1])
+        self.address_family = socket.AF_INET6 if ':' in host else socket.AF_INET
+        super().__init__((host, port), handler)
+
+    def server_bind(self):
+        if self.address_family == socket.AF_INET6:
+            # Keep IPv6-only listening consistent on Windows, macOS and Linux.
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        super().server_bind()
+
     def service_actions(self):
         stamp = time.monotonic()
         if stamp - getattr(self, 'cleaned_at', 0) > 30:
@@ -625,10 +637,14 @@ def main():
     parser.add_argument("--admin-port", type=int, default=0)
     parser.add_argument("--no-open", action="store_true")
     parser.add_argument('--check-update-runtime', metavar='REPORT', help=argparse.SUPPRESS)
+    parser.add_argument('--check-github-update', metavar='REPORT', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.check_update_runtime:
         from update import diagnose_windows_update_runtime
         return diagnose_windows_update_runtime(args.check_update_runtime)
+    if args.check_github_update:
+        from update import diagnose_github_update
+        return diagnose_github_update(args.check_github_update, DATA)
     initialize()
     with connect() as db:
         args.host = args.host or relay.setting(db, 'listen_host', '0.0.0.0')
