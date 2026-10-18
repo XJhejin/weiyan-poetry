@@ -30,7 +30,7 @@ def build():
          '--name', name, '--distpath', dist, '--workpath', work / 'pyinstaller', '--specpath', work,
          '--target-arch', 'arm64', '--osx-bundle-identifier', 'com.weiyan.poetry.server', '--icon', icon,
          '--add-data', str(ROOT / '服务端/admin_ui') + ':admin_ui', '--collect-all', 'nacl',
-         '--collect-all', 'webview', '--hidden-import', 'simple_websocket', ROOT / '服务端/server.py'])
+         '--collect-all', 'webview', '--hidden-import', 'simple_websocket', '--hidden-import', '_cffi_backend', ROOT / '服务端/server.py'])
     app = dist / (name + '.app')
     info_file = app / 'Contents/Info.plist'
     info = plistlib.loads(info_file.read_bytes())

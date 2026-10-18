@@ -60,6 +60,14 @@ def save_server(value):
     return value
 
 
+def save_notifications(enabled):
+    with CONFIG_LOCK:
+        CONFIG['native_notifications'] = bool(enabled)
+        temporary = CONFIG_FILE.with_suffix('.tmp')
+        temporary.write_text(json.dumps(CONFIG, ensure_ascii=False, indent=2), encoding='utf-8')
+        temporary.replace(CONFIG_FILE)
+
+
 class Gateway(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -105,6 +113,16 @@ class Gateway(BaseHTTPRequestHandler):
             if not self.valid_local_request():
                 return self.json_response({"error": "请求来源不正确。"}, 403)
             path = urlsplit(self.path).path
+            if path == '/desktop/notifications':
+                if self.command == 'POST':
+                    data = self.read_json()
+                    if not isinstance(data.get('enabled'), bool):
+                        raise ValueError('通知设置格式无效。')
+                    save_notifications(data['enabled'])
+                    if data['enabled'] and os.environ.get('WEIYAN_PLATFORM') == 'android':
+                        from java import jclass
+                        jclass('com.weiyan.poetry.MainActivity').requestNotifications()
+                return self.json_response({'enabled': CONFIG.get('native_notifications', True), 'native': bool(getattr(self.server, 'background', None)), 'platform': os.environ.get('WEIYAN_PLATFORM', 'windows')})
             if path.startswith('/desktop/update/'):
                 operation = path.rsplit('/', 1)[-1]
                 if self.command == 'POST':
@@ -126,6 +144,8 @@ class Gateway(BaseHTTPRequestHandler):
                     return self.json_response({"error": "地址太长了。"}, 400)
                 data = json.loads(self.rfile.read(length))
                 value = save_server(data.get("server_url"))
+                if getattr(self.server, 'background', None):
+                    self.server.background.clear()
                 return self.json_response({"server_url": value}, clear_cookie=True)
             if path == "/api/socket":
                 origin = self.headers.get("Origin")
@@ -192,6 +212,8 @@ class Gateway(BaseHTTPRequestHandler):
                 self.server.contexts[key] = context
             else:
                 context.me = data["me"]
+            if getattr(self.server, 'background', None):
+                self.server.background.activate(context, data)
         return context, data
 
     def read_json(self):
@@ -361,6 +383,7 @@ class Gateway(BaseHTTPRequestHandler):
         local = None
         self.close_connection = True
         polled = 0
+        context.active_sockets = getattr(context, 'active_sockets', 0) + 1
         try:
             local = Server(environ, ping_interval=12, max_message_size=32768)
             while local.connected and upstream.connected:
@@ -396,6 +419,7 @@ class Gateway(BaseHTTPRequestHandler):
         except (ConnectionClosed, OSError, RemoteError):
             pass
         finally:
+            context.active_sockets = max(0, getattr(context, 'active_sockets', 1) - 1)
             for connection in (local, upstream):
                 if connection:
                     try:
@@ -425,6 +449,8 @@ class Gateway(BaseHTTPRequestHandler):
             return self.json_response({"error": "还没有连接到服务端。请先启动服务端，或检查连接地址。", "offline": True}, 503)
         try:
             self.send_response(response.status)
+            if self.path in ('/api/logout', '/api/login', '/api/register', '/api/guest') and response.status == 200 and getattr(self.server, 'background', None):
+                self.server.background.clear()
             for name, value in response.getheaders():
                 if name.lower() not in ("connection", "transfer-encoding", "server", "date", "content-length"):
                     self.send_header(name, value)
@@ -489,9 +515,17 @@ def main():
     icon = str(PUBLIC / "assets" / "logo.ico")
     window = webview.create_window("未言诗集", url, width=1360, height=880, min_size=(900, 650),
                                   background_color="#fff8fa", text_select=True)
+    from tray import Tray
+    from background import BackgroundAgent
+    tray = Tray(window, PUBLIC / 'assets/logo.png', CONFIG, save_notifications)
+    gateway.background = BackgroundAgent(gateway, PROFILE, lambda: CONFIG['server_url'], tray.notify)
+    gateway.background.start()
+    tray.start()
     try:
         webview.start(gui="edgechromium", private_mode=False, storage_path=str(PROFILE / "webview"), icon=icon)
     finally:
+        gateway.background.stop()
+        tray.stop()
         gateway.shutdown()
         gateway.server_close()
 

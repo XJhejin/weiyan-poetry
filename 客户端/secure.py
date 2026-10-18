@@ -276,8 +276,9 @@ class SecureClient:
         digest = hashlib.sha256(unb64(device["box_key"]) + unb64(device["sign_key"])).hexdigest().upper()
         return " ".join(digest[i:i+4] for i in range(0, len(digest), 4))
 
-    def directory(self, cid, approve=False, expected=None):
-        directory = self.remote("/api/keys?conversation_id=" + quote(cid))["devices"]
+    def directory(self, cid, approve=False, expected=None, receiving=False):
+        suffix = '&receiving=1&device_id=' + self.device_id if receiving else ''
+        directory = self.remote("/api/keys?conversation_id=" + quote(cid) + suffix)["devices"]
         groups = {}
         for device in directory:
             groups.setdefault(device["user_id"], {})[device["device_id"]] = self.fingerprint(device)
@@ -297,7 +298,7 @@ class SecureClient:
         return directory, changed if not approve else [], digest
 
     def security(self, cid=None, approve=False, expected=None):
-        directory, changed, digest = self.directory(cid, approve, expected) if cid else ([], [], "")
+        directory, changed, digest = self.directory(cid, approve, expected, receiving=True) if cid else ([], [], "")
         policy = self.remote("/api/health").get("privacy", {})
         return {"encrypted": True, "local_encrypted": True, "algorithm": "libsodium · XSalsa20-Poly1305 / X25519 / Ed25519", "device_id": self.device_id,
                 "fingerprint": self.fingerprint({"box_key": b64(bytes(self.private.public_key)), "sign_key": b64(bytes(self.signing.verify_key))}),
@@ -391,7 +392,7 @@ class SecureClient:
                         self.remote("/api/received", {"device_id": self.device_id, "id": item["id"]})
                         continue
                     if cid not in cache:
-                        cache[cid] = self.directory(cid)
+                        cache[cid] = self.directory(cid, receiving=True)
                     directory, changed, _ = cache[cid]
                     if packet["sender_id"] in changed:
                         raise SecurityError("联系人设备发生变化，请核对安全指纹。")
@@ -422,6 +423,9 @@ class SecureClient:
                         message['attachment'] = attachment
                     if self.vault.save_message(message):
                         result.append(message)
+                        callback = getattr(self, 'on_received', None)
+                        if callback:
+                            callback(message)
                     # Acknowledge only after the encrypted SQLite transaction commits.
                     self.remote("/api/received", {"device_id": self.device_id, "id": item["id"]})
                 except (CryptoError, BadSignatureError, KeyError, TypeError, ValueError) as error:

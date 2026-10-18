@@ -25,6 +25,37 @@ import admin
 import update
 from secure import SecureClient, protect
 from nacl.signing import SigningKey
+from types import SimpleNamespace
+from background import BackgroundAgent
+
+
+class BackgroundTests(unittest.TestCase):
+    def test_protected_session_restore_mute_and_logout(self):
+        with tempfile.TemporaryDirectory(prefix='weiyan-background-') as folder:
+            bootstrap={'me': {'id': 'background-user'}, 'server_id': 'background-test', 'offline': True}
+            context=SecureClient(folder,'http://127.0.0.1:23074','weiyan_session=private-session-token',bootstrap)
+            received=[]
+            gateway=SimpleNamespace(contexts={})
+            agent=BackgroundAgent(gateway,folder,lambda:context.url,received.append)
+            agent.activate(context,bootstrap)
+            self.assertNotIn(b'private-session-token',agent.saved.read_bytes())
+            restored=BackgroundAgent(gateway,folder,lambda:context.url,received.append)
+            restored.start()
+            try:
+                self.assertEqual(restored.active.device_id,context.device_id)
+                self.assertEqual(restored.active.cookie,context.cookie)
+                message={'sender':{'id':'peer'},'conversation_id':'dm:background'}
+                restored.active.on_received(message)
+                self.assertEqual(received,[message])
+                restored.active.vault.put('ui','muted',['dm:background'])
+                restored.active.on_received(message)
+                restored.active.on_received({'sender':{'id':'background-user'},'conversation_id':'other'})
+                self.assertEqual(received,[message])
+                restored.clear()
+                self.assertFalse(restored.saved.exists())
+                self.assertIsNone(restored.active)
+            finally:
+                restored.stop()
 
 
 class AdminTests(unittest.TestCase):

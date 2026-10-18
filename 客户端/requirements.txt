@@ -1,3 +1,5 @@
 pywebview==6.2.1
 simple-websocket==1.1.0
 PyNaCl==1.6.2
+pystray==0.19.5; sys_platform == 'win32'
+Pillow==11.3.0

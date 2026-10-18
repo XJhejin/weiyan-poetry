@@ -195,6 +195,7 @@ function receiveMessage(m) {
   renderList();
 }
 function notify(m,conv) {
+  if(state.native)return;
   if(stored('muted',[]).includes(conv.id)) return;
   if(stored('notifications',false) && 'Notification' in window && Notification.permission==='granted' && document.hidden) {
     try { const n=new Notification(conv.name,{body:'收到一条已加密消息，打开客户端查看。',icon:'/assets/logo.svg',tag:conv.id});n.onclick=()=>{window.focus();selectConversation(conv.id);n.close();}; } catch { /* The unread badge still notifies. */ }
@@ -369,7 +370,7 @@ $('.rail-logo').onclick=event=>{event.preventDefault();state.view='messages';sel
 $('#daily-date').textContent=new Date().toLocaleDateString('zh-CN',{month:'2-digit',day:'2-digit'}).replace('/','.');
 async function checkHealth() {try{await api('/api/health');$('#server-status').textContent='小客厅已就绪 · 连接设置';$('#server-status-dot').classList.remove('offline');}catch{$('#server-status').textContent='服务端未连接 · 点击设置';$('#server-status-dot').classList.add('offline');}}
 async function boot() {
-  try {const config=await api('/desktop/config');state.server=config.server_url;await checkHealth();await bootstrap({initial:true});connectEvents();}
+  try {const config=await api('/desktop/config');state.server=config.server_url;state.native=config.native;await checkHealth();await bootstrap({initial:true});connectEvents();}
   catch(error){showAuth(error.status===401?'':error.message);}
 }
 setInterval(()=>{if(!state.me)checkHealth();},15000);

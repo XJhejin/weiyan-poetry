@@ -331,6 +331,8 @@ class Handler(BaseHTTPRequestHandler):
                     if path == "/api/keys":
                         cid = params.get("conversation_id", [""])[0]
                         access(db, cid, uid)
+                        if params.get('receiving', [''])[0] == '1':
+                            return self.json_response({'devices': relay.receive_directory(db, cid, uid, params.get('device_id', [''])[0], ApiError)})
                         return self.json_response({"devices": relay.directory(db, cid)})
                     if path == "/api/inbox":
                         return self.json_response(relay.inbox(db, uid, params.get("device_id", [""])[0], ApiError, integer(params.get("after", ["0"])[0])))

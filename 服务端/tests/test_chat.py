@@ -345,11 +345,14 @@ class ChatIntegration(unittest.TestCase):
         with self.db() as db:
             eve_device=db.execute('SELECT id FROM devices WHERE user_id=?',(eve_id,)).fetchone()[0]
             self.assertIsNotNone(db.execute('SELECT 1 FROM deliveries WHERE packet_id=? AND device_id=?',(msg['id'],eve_device)).fetchone())
+        self.bob.request('/api/groups',dict(action='settings',conversation_id=cid,mute_all=False))
+        last=self.eve.request('/api/messages',dict(conversation_id=cid,body='Before leaving',client_id='former-sender'),expected=201)['message']
         self.bob.request('/api/groups',dict(action='kick',conversation_id=cid,user_id=eve_id))
         self.eve.request('/api/keys?conversation_id='+cid,expected=403)
         self.eve.request('/api/messages',dict(conversation_id=cid,body='After kick',client_id='kicked-message'),expected=403)
         with self.db() as db:self.assertIsNone(db.execute('SELECT 1 FROM deliveries WHERE packet_id=? AND device_id=?',(msg['id'],eve_device)).fetchone())
-        self.assertNotIn(eve_device,{d['device_id'] for d in self.alice.request('/desktop/security?conversation_id='+cid)['devices']})
+        self.assertNotIn(eve_device,{d['device_id'] for d in self.alice.request('/api/keys?conversation_id='+cid)['devices']})
+        self.assertTrue(any(m['id']==last['id'] and m['body']=='Before leaving' for m in self.bob.request('/api/conversations/'+cid+'/messages')['messages']))
         self.alice.request('/api/groups',dict(action='transfer',conversation_id=cid,user_id=self.bob_id))
         self.alice.request('/api/groups',dict(action='dissolve',conversation_id=cid),expected=403)
         self.bob.request('/api/groups',dict(action='dissolve',conversation_id=cid))

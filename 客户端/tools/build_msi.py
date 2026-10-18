@@ -62,7 +62,6 @@ def build(wix):
     add(package, 'Icon', Id='AppIcon', SourceFile=str(ROOT / '客户端/ui/assets/logo.ico'))
     add(package, 'Property', Id='ARPPRODUCTICON', Value='AppIcon')
     add(package, 'Property', Id='ARPURLINFOABOUT', Value='https://github.com/XJhejin/weiyan-poetry')
-    add(package, 'Property', Id='ARPNOMODIFY', Value='1')
     ET.SubElement(package, '{' + UI + '}WixUI', {'Id': 'WixUI_Minimal'})
     rtf = work / 'license.rtf'
     license_text = (ROOT / 'LICENSE').read_text('utf-8').replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}').replace('\n', '\\par\n')

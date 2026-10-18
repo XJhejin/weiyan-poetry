@@ -39,6 +39,7 @@ public class MainActivity extends Activity {
     private String downloadUrl;
     private String pendingApk;
     private static MainActivity active;
+    public static volatile boolean isForeground;
     private final java.util.concurrent.ExecutorService worker = Executors.newSingleThreadExecutor();
 
     @Override public void onCreate(Bundle saved) {
@@ -52,10 +53,7 @@ public class MainActivity extends Activity {
         setContentView(splash);
         worker.execute(() -> {
             try {
-                File ui = new File(getNoBackupFilesDir(), "ui");
-                copyAssets("ui", ui);
-                if (!Python.isStarted()) Python.start(new AndroidPlatform(getApplicationContext()));
-                String url = Python.getInstance().getModule("mobile").callAttr("start", new File(getNoBackupFilesDir(),"client").getPath(), ui.getPath()).toString();
+                String url = ClientRuntime.start(getApplicationContext());
                 runOnUiThread(() -> showClient(url));
             } catch (Exception e) {
                 runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("启动未完成").setMessage(e.getMessage()).setPositiveButton("关闭",(d,w)->finish()).show());
@@ -79,7 +77,7 @@ public class MainActivity extends Activity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
+        settings.setAllowContentAccess(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setMediaPlaybackRequiresUserGesture(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
@@ -119,6 +117,9 @@ public class MainActivity extends Activity {
         setContentView(web);
         if (Build.VERSION.SDK_INT >= 35) web.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);return WindowInsets.CONSUMED;});
         web.loadUrl(url);
+        Intent service=new Intent(this,NotificationService.class);
+        if(Build.VERSION.SDK_INT>=26)startForegroundService(service);else startService(service);
+        requestNotifications();
     }
 
     private boolean isLocal(String url) {
@@ -176,7 +177,9 @@ public class MainActivity extends Activity {
         startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(uri,"application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
         pendingApk=null;
     }
-    @Override protected void onPause(){super.onPause();CookieManager.getInstance().flush();}
+    public static void requestNotifications(){MainActivity activity=active;if(activity!=null&&Build.VERSION.SDK_INT>=33&&activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)activity.runOnUiThread(()->activity.requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},104));}
+    @Override protected void onResume(){super.onResume();isForeground=true;NotificationService.clearUnread();}
+    @Override protected void onPause(){super.onPause();isForeground=false;CookieManager.getInstance().flush();}
     @Override public void onBackPressed(){if(web==null){super.onBackPressed();return;}web.evaluateJavascript("window.weiyanBack ? window.weiyanBack() : false",answer->{if(!"true".equals(answer))moveTaskToBack(true);});}
     @Override protected void onDestroy(){if(active==this)active=null;if(web!=null){web.stopLoading();web.destroy();}worker.shutdown();super.onDestroy();}
 }

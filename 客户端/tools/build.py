@@ -41,7 +41,7 @@ def build():
     staging = ROOT / "build-output"
     common = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--distpath", str(staging),
               "--specpath", str(ROOT / ".build"), "--icon", str(ASSETS / "logo.ico"),
-              "--hidden-import", "simple_websocket", "--collect-all", "nacl"]
+              "--hidden-import", "simple_websocket", "--hidden-import", "_cffi_backend", "--collect-all", "nacl"]
     subprocess.run(common + ['--workpath', str(ROOT / '.build' / 'updater'), '--name', 'update_helper', '--windowed', '--onefile',
                              '--paths', str(ROOT / '客户端'), str(ROOT / '客户端' / 'tools' / 'update_helper.py')], cwd=ROOT, check=True)
     helper = staging / 'update_helper.exe'
@@ -57,7 +57,7 @@ def build():
 
 
 def make_notices():
-    packages = ["pywebview", "pythonnet", "clr_loader", "cffi", "pycparser", "proxy_tools", "bottle", "typing_extensions", "simple-websocket", "wsproto", "h11", 'PyNaCl']
+    packages = ["pywebview", "pythonnet", "clr_loader", "cffi", "pycparser", "proxy_tools", "bottle", "typing_extensions", "simple-websocket", "wsproto", "h11", 'PyNaCl', 'pystray', 'Pillow']
     shared = "未言诗集 · 第三方组件许可\n\n本项目的界面、Logo 和插画为原创。通信设计参考 HarmonyChat，未复制其代码或素材。\n\n"
     python_license = Path(sys.base_prefix) / "LICENSE.txt"
     if python_license.is_file():

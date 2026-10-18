@@ -22,6 +22,8 @@ jobs:
         with:
           gradle-version: '8.10'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
       - name: Build phone application and isolated test APK
         working-directory: 客户端/android
         run: gradle --console=plain :app:assembleRelease :app:assembleDebug :app:assembleDebugAndroidTest
@@ -43,8 +45,10 @@ jobs:
             sleep 3
             adb install 客户端/android/app/build/outputs/apk/debug/app-debug.apk
             adb install 客户端/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb shell pm grant com.weiyan.poetry android.permission.POST_NOTIFICATIONS
             adb shell am instrument -w -e server http://10.0.2.2:23180 com.weiyan.poetry.test/com.weiyan.poetry.SmokeInstrumentation | tee android-smoke.txt
             grep -q 'WeiyanSmoke=PASS' android-smoke.txt
+            mkdir -p build-output
             adb shell screencap -p /sdcard/weiyan-phone.png
             adb pull /sdcard/weiyan-phone.png build-output/weiyan-phone.png
       - name: Collect logs

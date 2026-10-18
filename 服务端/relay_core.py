@@ -88,6 +88,25 @@ def directory(db, cid):
     return [dict(r) for r in rows]
 
 
+def receive_directory(db, cid, uid, device_id, error):
+    if not db.execute('SELECT 1 FROM devices WHERE id=? AND user_id=? AND revoked=0', (device_id, uid)).fetchone():
+        raise error('设备无权读取此离线队列。', 403)
+    result = directory(db, cid)
+    known = {d['device_id'] for d in result}
+    # A queued signature remains verifiable after its sender leaves the group.
+    # Scope historic public keys to packets still addressed to this exact device.
+    rows = db.execute('SELECT p.envelope FROM relay_packets p JOIN deliveries r ON r.packet_id=p.id WHERE r.device_id=?', (device_id,))
+    for row in rows:
+        packet = json.loads(row['envelope'])
+        if packet['conversation_id'] != cid or packet['device_id'] in known:
+            continue
+        device = db.execute('SELECT d.id device_id,d.user_id,d.box_key,d.sign_key,d.name,u.nickname FROM devices d JOIN users u ON u.id=d.user_id WHERE d.id=? AND d.user_id=? AND d.revoked=0 AND u.disabled=0', (packet['device_id'], packet['sender_id'])).fetchone()
+        if device:
+            result.append({**dict(device), 'historical': True})
+            known.add(device['device_id'])
+    return result
+
+
 def register_device(db, uid, payload, error):
     try:
         device = {k: payload[k] for k in ("device_id", "box_key", "sign_key", "name")}

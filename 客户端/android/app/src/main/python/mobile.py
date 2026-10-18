@@ -52,6 +52,13 @@ def start(profile, ui):
     _gateway.contexts = {}
     _gateway.context_lock = threading.RLock()
     _gateway.updater = Updater('client', main.PROFILE)
+    from background import BackgroundAgent
+    def notify(message):
+        if main.CONFIG.get('native_notifications', True):
+            from java import jclass
+            jclass('com.weiyan.poetry.NotificationService').notifyMessage(message['conversation_id'])
+    _gateway.background = BackgroundAgent(_gateway, main.PROFILE, lambda: main.CONFIG['server_url'], notify)
+    _gateway.background.start()
     threading.Thread(target=_gateway.serve_forever, daemon=True).start()
     _url = f'http://127.0.0.1:{_gateway.server_port}/?local_key={token}'
     return _url

@@ -2,10 +2,10 @@ import ctypes
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from update import apply_update
 
 if __name__ == "__main__":
     try:
+        from update import apply_update
         apply_update(sys.argv[1])
     except Exception as error:
         if len(sys.argv) > 1:
