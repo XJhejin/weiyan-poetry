@@ -1,26 +1,7 @@
 """Group membership and moderation metadata. Message contents never enter here."""
 import secrets
 import time
-import base64
-import re
-
-AVATARS = ('bunny', 'cat', 'bear', 'flower', 'moon', 'sparkles')
-COLORS = ('#ffe4ec', '#eae5ff', '#e2f1e8', '#fff0d6', '#dfefff')
-
-
-def valid_avatar(value):
-    if value in AVATARS:
-        return True
-    if not isinstance(value, str) or len(value) > 180000:
-        return False
-    match = re.fullmatch(r'data:image/(png|jpeg);base64,([A-Za-z0-9+/=]+)', value)
-    if not match:
-        return False
-    try:
-        raw = base64.b64decode(match[2], validate=True)
-        return len(raw) <= 128 * 1024 and (raw.startswith(b'\x89PNG\r\n\x1a\n') if match[1] == 'png' else raw.startswith(b'\xff\xd8\xff'))
-    except ValueError:
-        return False
+from avatars import AVATARS, COLORS, normalize_avatar
 
 
 def initialize(db):
@@ -138,8 +119,13 @@ def action(db, uid, data, core):
             description = text(data.get('description', conv['description']), 200, '群简介', allow_empty=True)
             announcement = text(data.get('announcement', member['announcement']), 1000, '群公告', allow_empty=True)
             avatar, color = data.get('avatar', conv['avatar']), data.get('color', conv['color'])
-            if not valid_avatar(avatar) or color not in COLORS:
-                raise error('请从列表中选择群头像和颜色。')
+            try:
+                if avatar != conv['avatar']:
+                    avatar = normalize_avatar(avatar)
+            except ValueError as exc:
+                raise error(str(exc)) from exc
+            if color not in COLORS:
+                raise error('请从列表中选择颜色。')
             for key in ('mute_all', 'invite_admin_only'):
                 if key in data and not isinstance(data[key], bool):
                     raise error('群设置格式不正确。')

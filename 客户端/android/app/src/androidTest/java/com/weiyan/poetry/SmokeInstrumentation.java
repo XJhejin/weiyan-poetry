@@ -41,6 +41,11 @@ public class SmokeInstrumentation extends Instrumentation {
             if(!"true".equals(js(web,"window.defaultCorrect")))throw new AssertionError("Wrong released server default");
             js(web,"post('/api/register',{username:'android_ui_'+Date.now(),password:'Android-test-only-2288',nickname:'界面验证'}).then(()=>{window.uiStage='registered';return bootstrap({initial:true});}).then(()=>{connectEvents();window.loggedIn=true;}).catch(e=>{window.uiError=e.message})");
             waitJs(web,"window.loggedIn===true");
+            js(web,"openProfile();let source=document.createElement('canvas');source.width=320;source.height=240;let pen=source.getContext('2d');pen.fillStyle='#d783a1';pen.fillRect(0,0,320,240);source.toBlob(blob=>{let data=new DataTransfer();data.items.add(new File([blob],'avatar.png',{type:'image/png'}));let input=document.querySelector('#profile-avatar-editor .avatar-file');input.files=data.files;input.dispatchEvent(new Event('change'));});");
+            waitJs(web,"document.querySelector('#profile-avatar-editor .avatar-crop')?.hidden===false");
+            js(web,"let scale=document.querySelector('#profile-avatar-editor .avatar-zoom');scale.value='1.5';scale.dispatchEvent(new Event('input'));document.querySelector('#profile-avatar-editor .avatar-apply').click();document.querySelector('#profile-form button[type=submit]').click();");
+            waitJs(web,"state.me.avatar.startsWith('data:image/jpeg;base64,') && !document.querySelector('#modal').open");
+            if(!"true".equals(js(web,"document.querySelector('#my-avatar .custom-avatar')!==null")))throw new AssertionError("Personal avatar did not synchronize");
             if(!"true".equals(js(web,"state.conversations.filter(c=>c.kind==='room').length===1 && state.conversations.find(c=>c.kind==='room').name==='-扉页-'")))throw new AssertionError("Room migration failed");
             js(web,"openCreateGroup();document.querySelector('#new-group-name').value='手机群聊';document.querySelector('#create-group-form button[type=submit]').click();");
             waitJs(web,"state.conversations.some(c=>c.kind==='group'&&c.name==='手机群聊')");
@@ -51,9 +56,9 @@ public class SmokeInstrumentation extends Instrumentation {
             try(InputStream in=getContext().getAssets().open("smoke.py")){
                 String code=new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
                 PyObject globals=Python.getInstance().getModule("builtins").callAttr("dict");
-                globals.put("server_url",base);globals.put("test_profile",new java.io.File(getTargetContext().getNoBackupFilesDir(),"instrumentation").getPath());
+                globals.callAttr("__setitem__","server_url",base);globals.callAttr("__setitem__","test_profile",new java.io.File(getTargetContext().getNoBackupFilesDir(),"instrumentation").getPath());
                 Python.getInstance().getModule("builtins").callAttr("exec",code,globals);
-                if(!"PASS".equals(globals.get("smoke_result").toString()))throw new AssertionError("Native crypto smoke failed");
+                if(!"PASS".equals(globals.callAttr("__getitem__","smoke_result").toString()))throw new AssertionError("Native crypto smoke failed");
                 runOnMainSync(()->activity.moveTaskToBack(true));
                 Thread.sleep(750);
                 Python.getInstance().getModule("builtins").callAttr("exec",

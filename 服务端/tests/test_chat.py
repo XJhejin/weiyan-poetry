@@ -2,6 +2,7 @@
 import base64
 import sqlite3
 import hashlib
+import io
 import copy
 import concurrent.futures
 import http.cookiejar
@@ -18,6 +19,7 @@ import urllib.error
 import urllib.request
 
 from simple_websocket import Client
+from PIL import Image, PngImagePlugin
 
 
 class PortAwareClient(Client):
@@ -400,6 +402,52 @@ class ChatIntegration(unittest.TestCase):
             self.assertFalse(list(session.cookies))
         finally:
             self.__class__.server=self.start_server()
+
+    def test_13_custom_avatars_sync_validation_and_group_permissions(self):
+        source = io.BytesIO()
+        metadata = PngImagePlugin.PngInfo()
+        metadata.add_text('private-source-metadata', 'must-not-be-retained')
+        Image.new('RGBA', (320, 240), '#d783a1').save(source, 'PNG', pnginfo=metadata)
+        uploaded = 'data:image/png;base64,' + base64.b64encode(source.getvalue()).decode()
+        me = self.alice.request('/api/profile', {'avatar': uploaded})['me']
+        saved = me['avatar']
+        self.assertTrue(saved.startswith('data:image/jpeg;base64,'))
+        pixels = base64.b64decode(saved.split(',')[1])
+        self.assertNotIn(b'must-not-be-retained', pixels)
+        with Image.open(io.BytesIO(pixels)) as image:
+            self.assertEqual(image.size, (256, 256))
+            self.assertFalse(image.getexif())
+        # Search, contacts, direct conversation and visible message profiles agree.
+        self.assertEqual(self.bob.request('/api/users?q=@alice_test')['users'][0]['avatar'], saved)
+        boot = self.bob.request('/api/bootstrap')
+        self.assertEqual(next(c for c in boot['conversations'] if c['id'] == self.cid)['avatar'], saved)
+        self.assertEqual(next(u for u in boot['contacts'] if u['id'] == self.alice_id)['avatar'], saved)
+        profile_path = '/api/profiles?conversation_id=' + self.cid + '&ids=' + self.alice_id
+        self.assertEqual(self.bob.request(profile_path)['users'][0]['avatar'], saved)
+        self.eve.request(profile_path, expected=403)
+        # Updating another field must not repeatedly recompress an existing avatar.
+        self.assertEqual(self.alice.request('/api/profile', {'bio': 'avatar retained'})['me']['avatar'], saved)
+        for invalid in ('data:image/svg+xml;base64,PHN2Zz4=',
+                        'data:image/png;base64,' + base64.b64encode(b'\x89PNG\r\n\x1a\nbroken').decode(),
+                        {'file': 'not an image'}, 'data:image/jpeg;base64,' + 'A' * 180000):
+            self.alice.request('/api/profile', {'avatar': invalid}, expected=400)
+        oversized = io.BytesIO()
+        Image.new('RGB', (2048, 32)).save(oversized, 'PNG')
+        self.alice.request('/api/profile', {'avatar': 'data:image/png;base64,' + base64.b64encode(oversized.getvalue()).decode()}, expected=400)
+        cid = self.alice.request('/api/groups', {'action': 'create', 'name': 'Avatar validation'})['conversation_id']
+        self.alice.request('/api/groups', {'action': 'invite', 'conversation_id': cid, 'user_id': self.bob_id})
+        invite = next(i for i in self.bob.request('/api/bootstrap')['group_invites'] if i['cid'] == cid)
+        self.bob.request('/api/groups', {'action': 'accept', 'invitation_id': invite['id']})
+        self.bob.request('/api/groups', {'action': 'settings', 'conversation_id': cid, 'avatar': uploaded}, expected=403)
+        self.alice.request('/api/groups', {'action': 'settings', 'conversation_id': cid, 'avatar': uploaded})
+        self.assertEqual(self.bob.request('/api/groups?conversation_id=' + cid)['conversation']['avatar'], saved)
+        self.alice.request('/api/groups', {'action': 'dissolve', 'conversation_id': cid})
+        # A new process sees the same saved profile; encryption identities stay valid.
+        self.stop_process(self.__class__.server)
+        self.__class__.server = self.start_server()
+        self.assertEqual(self.bob.request(profile_path)['users'][0]['avatar'], saved)
+        self.alice.request('/api/profile', {'avatar': 'flower'})
+        self.assertEqual(self.bob.request(profile_path)['users'][0]['avatar'], 'flower')
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

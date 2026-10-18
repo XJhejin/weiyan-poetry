@@ -16,3 +16,5 @@ dialog.motion-closing::backdrop{animation:backdrop-leave .15s ease both}
 @keyframes backdrop-arrive{from{opacity:0}to{opacity:1}}
 @keyframes backdrop-leave{from{opacity:1}to{opacity:0}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+.account-identity{display:flex;align-items:center;gap:10px}.account-avatar{display:inline-flex;width:38px;height:38px;align-items:center;justify-content:center;flex:none;font-size:23px;border-radius:11px;background:#fbedf3;overflow:hidden}.account-avatar img{width:100%;height:100%;object-fit:cover}

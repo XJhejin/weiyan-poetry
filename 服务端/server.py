@@ -27,6 +27,7 @@ import webbrowser
 import relay_core as relay
 import groups
 import friends
+from avatars import COLORS, normalize_avatar
 from release_config import VERSION
 
 ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
@@ -328,6 +329,13 @@ class Handler(BaseHTTPRequestHandler):
                                                    "contacts": [public_user(r) for r in contacts], "online": online, "online_users": online_users, "server_id": relay.setting(db, "server_id"), "privacy": relay.privacy(db), "group_invites": groups.invitations(db, uid), "friend_requests": friends.pending(db, uid), "outgoing_friend_requests": friends.outgoing(db, uid)})
                     if path == '/api/groups':
                         return self.json_response(groups.details(db, params.get('conversation_id', [''])[0], uid, sys.modules[__name__]))
+                    if path == '/api/profiles':
+                        access(db, params.get('conversation_id', [''])[0], uid)
+                        ids = list(dict.fromkeys(params.get('ids', [''])[0].split(',')))
+                        if len(ids) > 100 or any(not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', item) for item in ids):
+                            raise ApiError('用户列表格式不正确。')
+                        rows = db.execute('SELECT * FROM users WHERE id IN (' + ','.join('?' * len(ids)) + ')', ids)
+                        return self.json_response({'users': [public_user(row) for row in rows]})
                     if path == "/api/keys":
                         cid = params.get("conversation_id", [""])[0]
                         access(db, cid, uid)
@@ -410,12 +418,18 @@ class Handler(BaseHTTPRequestHandler):
                     db.execute("DELETE FROM sessions WHERE token_hash=?", (hashlib.sha256(token.encode()).hexdigest(),))
                     return self.json_response({"ok": True}, cookie=f"{COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
                 if path == "/api/profile":
+                    rate_limit(('profile', uid), 30)
                     nickname = clean_text(payload.get("nickname", me["nickname"]), 16, "昵称")
                     bio = clean_text(payload.get("bio", ""), 80, "签名", allow_empty=True)
                     avatar = payload.get("avatar", me["avatar"])
                     color = payload.get("color", me["color"])
-                    if avatar not in ("bunny", "cat", "bear", "flower", "moon", "sparkles") or color not in ("#ffe4ec", "#eae5ff", "#e2f1e8", "#fff0d6", "#dfefff"):
-                        raise ApiError("请从列表里选择头像和颜色。")
+                    try:
+                        if avatar != me['avatar']:
+                            avatar = normalize_avatar(avatar)
+                    except ValueError as exc:
+                        raise ApiError(str(exc)) from exc
+                    if color not in COLORS:
+                        raise ApiError("请从列表里选择颜色。")
                     if me["is_guest"] and payload.get("username"):
                         username = validate_username(payload.get("username"))
                         password = validate_password(payload.get("password"))

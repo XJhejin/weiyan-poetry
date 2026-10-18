@@ -85,13 +85,15 @@ class Controller:
         elif action == "settings":
             with self.core.connect() as db:
                 db.execute("UPDATE settings SET value=? WHERE key='registration'", ('1' if payload.get('registration') else '0',))
-        elif action in ("disable", "enable", "disconnect", "revoke"):
+        elif action in ("disable", "enable", "disconnect", "revoke", "reset_avatar"):
             uid = payload.get("user_id")
             with self.core.connect() as db:
                 if not db.execute("SELECT 1 FROM users WHERE id=? AND id!='system'", (uid,)).fetchone():
                     raise ValueError("账号不存在。")
                 if action in ("disable", "enable"):
                     db.execute("UPDATE users SET disabled=? WHERE id=?", (int(action == "disable"), uid))
+                if action == 'reset_avatar':
+                    db.execute("UPDATE users SET avatar='flower' WHERE id=?", (uid,))
                 if action in ("disable", "disconnect"):
                     db.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
                 if action == "revoke":
@@ -105,6 +107,8 @@ class Controller:
                 self.core.EVENTS.publish({"type": "expired"}, {uid})
             elif action == "revoke":
                 self.core.EVENTS.publish({"type": "devices"})
+            elif action == 'reset_avatar':
+                self.core.EVENTS.publish({'type': 'profile'})
         else:
             raise ValueError("操作不存在。")
 
