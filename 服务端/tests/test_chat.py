@@ -148,6 +148,17 @@ class ChatIntegration(unittest.TestCase):
     def send(self,body,mid,cid=None,image_id=None):
         return self.alice.request('/api/messages',dict(conversation_id=cid or self.cid,body=body,client_id=mid,image_id=image_id),expected=201)['message']
 
+    def history_until(self, session, predicate, cid=None):
+        """Reception intentionally yields between pages so UI requests stay responsive."""
+        until = time.time() + 60
+        while True:
+            page = session.request('/api/conversations/' + (cid or self.cid) + '/messages')
+            if predicate(page['messages']):
+                return page
+            if time.time() >= until:
+                self.fail('Expected encrypted delivery did not arrive: ' + str([m['client_id'] for m in page['messages']]))
+            time.sleep(.1)
+
     def assert_queue_cleared(self,mid):
         # The response can arrive while the final SQLite context is committing.
         # Wait for that transaction without initiating additional delivery work.
@@ -263,7 +274,7 @@ class ChatIntegration(unittest.TestCase):
 
     def test_06_local_pagination_server_and_client_restart_offline_history(self):
         for index in range(53):self.send('Pagination '+str(index),'page-'+str(index))
-        first=self.bob.request('/api/conversations/'+self.cid+'/messages')
+        first=self.history_until(self.bob, lambda messages: len(messages)==50 and any(m['client_id']=='page-52' for m in messages))
         self.assertEqual(len(first['messages']),50);self.assertTrue(first['has_more'])
         second=self.bob.request('/api/conversations/'+self.cid+'/messages?before='+str(first['messages'][0]['id']))
         self.assertFalse({m['id'] for m in first['messages']}&{m['id'] for m in second['messages']})
@@ -296,9 +307,9 @@ class ChatIntegration(unittest.TestCase):
             self.assertIsNotNone(db.execute('select 1 from relay_packets where id=?',(msg['id'],)).fetchone())
         info=self.bob.request('/desktop/security?conversation_id='+self.cid)
         self.assertIsNone(info['privacy']['retention_days']);self.assertIsNone(info['privacy']['queue_limit_mb'])
-        history=self.bob.request('/api/conversations/'+self.cid+'/messages')['messages']
+        history=self.history_until(self.bob, lambda messages: any(m['client_id']=='permanent-001' for m in messages))['messages']
         self.assertTrue(any(m['client_id']=='permanent-001' for m in history))
-        self.new_bob.request('/api/bootstrap')
+        self.history_until(self.new_bob, lambda messages: any(m['client_id']=='permanent-001' for m in messages))
         self.assert_queue_cleared(msg['id'])
 
     def test_08_five_megabyte_image_roundtrip(self):
@@ -470,7 +481,7 @@ class ChatIntegration(unittest.TestCase):
             with self.db() as db:
                 self.assertIsNone(db.execute('SELECT 1 FROM relay_packets WHERE id=?', (original['id'],)).fetchone())
             for session in (self.bob, self.new_bob):
-                history = session.request('/api/conversations/' + self.cid + '/messages')['messages']
+                history = self.history_until(session, lambda messages: any(m['id']==original['id'] and m.get('recalled') for m in messages))['messages']
                 m = next(m for m in history if m['id'] == original['id'])
                 self.assertTrue(m['recalled']); self.assertEqual(m['body'], '消息已撤回'); self.assertNotIn('attachment', m)
             if original.get('image'):
@@ -488,8 +499,8 @@ class ChatIntegration(unittest.TestCase):
         # A third profile starts empty, then obtains encrypted history from the old device.
         late_recall = self.send('late-device-recall-marker', 'late-device-recall')
         for session in (self.bob, self.new_bob):
-            session.request('/api/bootstrap')
-        expected = {m['id'] for m in self.bob.request('/api/conversations/' + self.cid + '/messages')['messages']}
+            ready = self.history_until(session, lambda messages: any(m['id']==late_recall['id'] for m in messages))
+        expected = {m['id'] for m in ready['messages']}
         port = free_port(); env = self.env.copy(); env['WEIYAN_CLIENT_DATA'] = str(Path(self.temp.name)/'third-client')
         process = self.start_client(port, env)
         newcomer = Session(f'http://127.0.0.1:{port}')
@@ -524,11 +535,11 @@ class ChatIntegration(unittest.TestCase):
             self.alice.request('/desktop/security', {'conversation_id': self.cid, 'approve': True, 'directory_digest': info['directory_digest']})
             self.alice.request('/api/recall', {'id': late_recall['id'], 'client_id': late_recall['client_id']})
             for session in (newcomer, self.bob, self.new_bob):
-                history = session.request('/api/conversations/' + self.cid + '/messages')['messages']
+                history = self.history_until(session, lambda messages: any(m['id']==late_recall['id'] and m.get('recalled') for m in messages))['messages']
                 self.assertTrue(next(m for m in history if m['id'] == late_recall['id'])['recalled'])
             own = self.new_bob.request('/api/messages', {'conversation_id': self.cid, 'client_id': 'own-device-sync', 'body': 'same-account-own-message'}, expected=201)['message']
             for session in (newcomer, self.bob):
-                history = session.request('/api/conversations/' + self.cid + '/messages')['messages']
+                history = self.history_until(session, lambda messages: any(m['id']==own['id'] for m in messages))['messages']
                 self.assertTrue(any(m['id'] == own['id'] and m['sender']['id'] == self.bob_id for m in history))
             with self.db() as db:
                 for row in db.execute("SELECT envelope FROM relay_packets"):
