@@ -114,6 +114,8 @@ class ChatIntegration(unittest.TestCase):
     @classmethod
     def start_client(cls,port,env):
         entry=[str(ROOT/'客户端'/'未言诗集.exe')] if os.environ.get('WEIYAN_TEST_BINARIES') else [sys.executable,str(ROOT/'客户端'/'main.py')]
+        if os.environ.get('WEIYAN_CLIENT_EXECUTABLE'):
+            entry=[os.environ['WEIYAN_CLIENT_EXECUTABLE']]
         process=subprocess.Popen(entry+['--browser','--no-open','--port',str(port),'--server',cls.server_base],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         cls.wait_for(f'http://127.0.0.1:{port}/desktop/config');return process
 

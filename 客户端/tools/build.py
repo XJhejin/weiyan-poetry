@@ -1,4 +1,5 @@
 """Build two independent portable Windows programs. Run with Python 3.12 x64."""
+import argparse
 from pathlib import Path
 from importlib import metadata
 import shutil
@@ -35,7 +36,7 @@ def make_icon():
     image.save(ASSETS / "logo.ico", sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])
 
 
-def build():
+def build(staging_only=False):
     make_icon()
     make_notices()
     staging = ROOT / "build-output"
@@ -51,9 +52,10 @@ def build():
     subprocess.run(common + ["--workpath", str(ROOT / ".build" / "server"), "--name", "未言诗集服务端", "--windowed", "--onedir",
                             '--add-data', f"{ROOT / '服务端' / 'admin_ui'};admin_ui", '--add-data', f'{helper};.', '--collect-all', 'webview',
                             str(ROOT / "服务端" / "server.py")], cwd=ROOT, check=True)
-    shutil.copytree(staging / "未言诗集", ROOT / "客户端", dirs_exist_ok=True)
-    shutil.copytree(staging / "未言诗集服务端", ROOT / "服务端", dirs_exist_ok=True)
-    print("\nBuilt: 客户端/未言诗集.exe and 服务端/未言诗集服务端.exe", flush=True)
+    if not staging_only:
+        shutil.copytree(staging / "未言诗集", ROOT / "客户端", dirs_exist_ok=True)
+        shutil.copytree(staging / "未言诗集服务端", ROOT / "服务端", dirs_exist_ok=True)
+    print("\nBuilt: build-output/未言诗集 and build-output/未言诗集服务端", flush=True)
 
 
 def make_notices():
@@ -77,4 +79,6 @@ def make_notices():
 
 
 if __name__ == "__main__":
-    build()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--staging-only', action='store_true', help='仅生成发布目录，不覆盖正在使用的程序目录')
+    build(staging_only=parser.parse_args().staging_only)
