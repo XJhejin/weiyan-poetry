@@ -24,6 +24,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.TextView;
+import android.widget.FrameLayout;
 import android.widget.Toast;
 import com.chaquo.python.Python;
 import com.chaquo.python.android.AndroidPlatform;
@@ -121,9 +122,14 @@ public class MainActivity extends Activity {
             Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream").putExtra(Intent.EXTRA_TITLE,name);
             startActivityForResult(intent,102);
         });
-        setContentView(web);
+        // WebView padding does not move the Chromium viewport. Inset its parent
+        // so the HTML viewport and fixed controls stay within the safe area.
+        FrameLayout frame=new FrameLayout(this);
+        frame.setBackgroundColor(Color.rgb(255,248,250));
+        frame.addView(web,new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.MATCH_PARENT));
+        setContentView(frame);
         final int topSpacing=Math.round(8*getResources().getDisplayMetrics().density);
-        web.setOnApplyWindowInsetsListener((v,insets)->{
+        frame.setOnApplyWindowInsetsListener((v,insets)->{
             int left,top,right,bottom;
             if(Build.VERSION.SDK_INT>=30){android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout()|WindowInsets.Type.ime());left=safe.left;top=safe.top;right=safe.right;bottom=safe.bottom;}
             else{
@@ -133,7 +139,7 @@ public class MainActivity extends Activity {
             v.setPadding(left,top+topSpacing,right,bottom);
             return Build.VERSION.SDK_INT>=30?WindowInsets.CONSUMED:insets.consumeSystemWindowInsets();
         });
-        web.requestApplyInsets();
+        frame.requestApplyInsets();
         web.loadUrl(url);
         NotificationService.startIfEnabled(this);
         requestNotifications();

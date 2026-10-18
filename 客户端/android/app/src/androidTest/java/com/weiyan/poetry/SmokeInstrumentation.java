@@ -42,8 +42,12 @@ public class SmokeInstrumentation extends Instrumentation {
                 android.view.WindowInsets insets=phoneWeb.getRootWindowInsets();
                 if(insets==null){layoutError.set("Missing phone safe-area insets");return;}
                 int safeTop=insets.getInsets(android.view.WindowInsets.Type.systemBars()|android.view.WindowInsets.Type.displayCutout()).top;
+                int safeBottom=insets.getInsets(android.view.WindowInsets.Type.systemBars()|android.view.WindowInsets.Type.displayCutout()).bottom;
                 int spacing=Math.round(8*phoneWeb.getResources().getDisplayMetrics().density);
-                if(phoneWeb.getPaddingTop()<safeTop+spacing)layoutError.set("Chat overlaps status bar or display cutout");
+                int[] position=new int[2];phoneWeb.getLocationOnScreen(position);
+                int screenBottom=activity.getWindowManager().getCurrentWindowMetrics().getBounds().bottom;
+                if(position[1]<safeTop+spacing)layoutError.set("Chat viewport overlaps status bar or display cutout");
+                if(position[1]+phoneWeb.getHeight()>screenBottom-safeBottom)layoutError.set("Composer viewport overlaps navigation bar");
             });
             if(layoutError.get()!=null)throw new AssertionError(layoutError.get());
             String base=args.getString("server","http://10.0.2.2:23180");
