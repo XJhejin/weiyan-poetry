@@ -1,2 +1,2 @@
 PyInstaller==6.22.3
-Pillow==13.0.0
+Pillow==11.3.0

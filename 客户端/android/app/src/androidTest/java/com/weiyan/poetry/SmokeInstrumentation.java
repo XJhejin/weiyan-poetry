@@ -54,6 +54,22 @@ public class SmokeInstrumentation extends Instrumentation {
                 globals.put("server_url",base);globals.put("test_profile",new java.io.File(getTargetContext().getNoBackupFilesDir(),"instrumentation").getPath());
                 Python.getInstance().getModule("builtins").callAttr("exec",code,globals);
                 if(!"PASS".equals(globals.get("smoke_result").toString()))throw new AssertionError("Native crypto smoke failed");
+                runOnMainSync(()->activity.moveTaskToBack(true));
+                Thread.sleep(750);
+                Python.getInstance().getModule("builtins").callAttr("exec",
+                    "from mobile import _gateway\n_gateway.background.activate(b, bob.call('/api/bootstrap'))\na.send({'conversation_id':cid,'body':'notification-private-body-6628','client_id':'notify-'+secrets.token_hex(8)})",globals);
+                android.app.NotificationManager manager=(android.app.NotificationManager)getTargetContext().getSystemService(android.content.Context.NOTIFICATION_SERVICE);
+                boolean notified=false;
+                for(int i=0;i<60&&!notified;i++){
+                    for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2){
+                        String content=n.getNotification().extras.toString();
+                        if(content.contains("notification-private-body"))throw new AssertionError("Notification revealed message plaintext");
+                        notified=true;
+                    }
+                    if(!notified)Thread.sleep(250);
+                }
+                if(!notified)throw new AssertionError("No encrypted message notification while Activity was in background");
+                getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
             }
             result.putString("WeiyanSmoke","PASS");finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("WeiyanSmoke","FAIL: "+android.util.Log.getStackTraceString(e));finish(Activity.RESULT_CANCELED,result);}

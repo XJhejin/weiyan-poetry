@@ -1,4 +1,4 @@
-"""Package and sign independent Windows releases; keep the key off GitHub."""
+"""Publish signed Windows, Android and Apple Silicon releases; keys stay local."""
 import argparse
 import base64
 import hashlib
@@ -73,6 +73,21 @@ def prepare():
         manifest['assets'][kind] = {'name': name, 'bytes': archive.stat().st_size, 'sha256': digest}
         files.append(archive)
         print(f'{label}: {archive.name} ({archive.stat().st_size / 1048576:.1f} MB)', flush=True)
+    for kind, name in (
+        ('client_windows_msi', f'weiyan-client-{config["VERSION"]}-windows-x64.msi'),
+        ('client_android', f'weiyan-client-{config["VERSION"]}-android.apk'),
+        ('server_macos_arm64', f'weiyan-server-{config["VERSION"]}-macos-arm64.dmg'),
+    ):
+        source = ROOT / 'build-output' / name
+        if not source.is_file():
+            raise SystemExit('缺少已验证的平台安装包：' + name)
+        target = folder / name
+        shutil.copy2(source, target)
+        with target.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        manifest['assets'][kind] = {'name': name, 'bytes': target.stat().st_size, 'sha256': digest}
+        files.append(target)
+        print(f'{name} ({target.stat().st_size / 1048576:.1f} MB)', flush=True)
     manifest['signature'] = base64.b64encode(key.sign(MANIFEST_DOMAIN + canonical(manifest)).signature).decode()
     verify_manifest(manifest)
     manifest_file = folder / 'weiyan-update.json'
@@ -98,26 +113,30 @@ def main():
     if not remote or remote[0] != commit:
         raise SystemExit('当前提交尚未同步到 origin；请先推送项目分支。')
     notes_file = files[0].parent / 'release-notes.md'
-    notes_file.write_text(f'''未言诗集 {config['VERSION']} · Windows 10/11 x64
+    notes_file.write_text(f'''未言诗集 {config['VERSION']}
 
-分别下载客户端和服务端 ZIP，完整解压后双击其中的 exe；不需要安装 Python。
+安装包：
+- Windows 客户端：`weiyan-client-{config['VERSION']}-windows-x64.msi`。安装后自动创建桌面与开始菜单快捷方式。
+- 安卓客户端：`weiyan-client-{config['VERSION']}-android.apk`。Android 7.0+，ARM64 或 x86_64；由维护者固定证书签名。
+- Apple Silicon Mac 服务端：`weiyan-server-{config['VERSION']}-macos-arm64.dmg`。打开后拖入 Applications。
+- Windows 客户端与服务端便携 ZIP 继续提供；完整解压并保留 `_internal`，无需安装 Python。
 
-- 浅粉色聊天界面、简洁无框书页花瓣 Logo，称呼使用“掇花者”。
-- 独立服务端图形管理：运行状态、账号与设备、密文存储规则。
-- 文字与图片端到端加密；本机记录、草稿、收藏和待发内容加密保存。
-- 未送达密文永久保留、无软件队列容量上限，接收确认后删除。
-- 两端的软件更新页面连接本仓库，验证 Ed25519 发布签名和 SHA-256 后安装。
+功能：
+- 单一公共房间「-扉页-」，好友申请与同意，@用户名/昵称搜索，可直接与非好友私聊。
+- 群聊邀请、群主与管理员、踢出、群名称/头像/公告、禁言、群昵称、群主转让、退群与解散。
+- 文字、图片、文件、视频端到端加密；支持视频预览、播放和拖入附件。图片最多 5 MB，文件/视频每项最多 20 MB。
+- Windows 关闭窗口后留在托盘；新消息系统提醒。安卓使用可停止的前台后台接收服务，通知不显示聊天正文。
+- 本机加密记录、草稿、收藏与待发内容；服务端未送达密文永久保留，无软件总容量配额，确认接收后删除。
+- 两端提供 GitHub 更新页；校验 Ed25519 清单签名与 SHA-256。安卓还校验应用签名证书。
 
-请选择 `weiyan-client-{config['VERSION']}-windows-x64.zip`（客户端）或
-`weiyan-server-{config['VERSION']}-windows-x64.zip`（管理服务端）。各自的 `_internal` 文件夹必须保留。
+默认服务端端口 23074；发布客户端默认连接 `http://113.219.237.106:23074`。此前保存的自定义地址保留。
+需要在该地址实际部署服务端并开放/转发端口；软件发布不会自动部署远程服务器。公网登录凭据应通过 HTTPS 保护。
 
-首次使用先启动服务端，再启动客户端。同机默认地址 http://127.0.0.1:8765。
-局域网使用请在服务端复制连接地址。公网部署需另配 HTTPS。
+Mac 构建仅作临时签名，未取得 Apple Developer ID 公证，首次打开需在 macOS 系统设置确认来源。
+安卓省电策略、强行停止或系统清理可能中断后台接收；重新打开后补收。未提供厂商云推送。
+加密协议尚未独立安全审计，无双棘轮前向保密；首次通信请核对设备指纹。新设备不能恢复旧设备历史。
+更新保留用户资料；Mac 服务端资料位于 `~/Library/Application Support/WeiyanPoetry/server`。
 
-加密协议尚未经过独立安全审计，无双棘轮前向保密。首次通信请核对设备指纹。
-旧记录留在原电脑；更新会保留客户端资料和服务端 data。
-
-已完成源代码、隐私与更新边界及打包程序集成测试。
 发布源码提交：{commit}
 ''', encoding='utf-8')
     run([gh, 'release', 'create', 'v' + config['VERSION'], '--repo', config['REPOSITORY'], '--target', commit,
