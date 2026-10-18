@@ -51,6 +51,8 @@ jobs:
             adb logcat -d > android-logcat.txt
             grep -q 'WeiyanSmoke=PASS' android-smoke.txt
             mkdir -p build-output
+            adb shell am start -W -n com.weiyan.poetry/.MainActivity
+            sleep 5
             adb shell screencap -p /sdcard/weiyan-phone.png
             adb pull /sdcard/weiyan-phone.png build-output/weiyan-phone.png
       - name: Collect logs
