@@ -50,8 +50,12 @@ public class SmokeInstrumentation extends Instrumentation {
                 if(position[1]+phoneWeb.getHeight()>screenBottom-safeBottom)layoutError.set("Composer viewport overlaps navigation bar");
             });
             if(layoutError.get()!=null)throw new AssertionError(layoutError.get());
+            if("true".equals(args.getString("verifyDefaultTls","false"))){
+                js(web,"fetch('/api/health').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(h=>{window.publicTlsOk=h.ok===true;}).catch(e=>{window.uiError='Public HTTPS: '+e.message;})");
+                waitJs(web,"window.publicTlsOk===true");
+            }
             String base=args.getString("server","http://10.0.2.2:23180");
-            js(web,"fetch('/desktop/config').then(r=>r.json()).then(c=>{window.defaultCorrect=c.server_url==='http://113.219.237.106:23074';return post('/desktop/config',{server_url:'"+base+"'});}).then(()=>{window.configured=true;})");
+            js(web,"fetch('/desktop/config').then(r=>r.json()).then(c=>{window.defaultCorrect=c.server_url==='https://156.225.28.175:23074';return post('/desktop/config',{server_url:'"+base+"'});}).then(()=>{window.configured=true;})");
             waitJs(web,"window.configured===true");
             if(!"true".equals(js(web,"window.defaultCorrect")))throw new AssertionError("Wrong released server default");
             js(web,"post('/api/register',{username:'android_ui_'+Date.now(),password:'Android-test-only-2288',nickname:'界面验证'}).then(()=>{window.uiStage='registered';return bootstrap({initial:true});}).then(()=>{connectEvents();window.loggedIn=true;}).catch(e=>{window.uiError=e.message})");

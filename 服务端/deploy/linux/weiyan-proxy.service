@@ -1,0 +1,25 @@
+[Unit]
+Description=Weiyan Poetry HTTPS proxy and certificate renewal
+After=network-online.target weiyan-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=weiyan-proxy
+Group=weiyan-proxy
+WorkingDirectory=/var/lib/weiyan-proxy
+Environment=HOME=/var/lib/weiyan-proxy
+Environment=WEIYAN_PUBLIC_IP=156.225.28.175
+ExecStart=/opt/weiyan/caddy/caddy run --config /etc/weiyan/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+# systemd 219: grant cap_net_bind_service=+ep to the root-owned Caddy binary.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

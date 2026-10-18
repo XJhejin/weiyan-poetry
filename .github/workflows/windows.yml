@@ -32,6 +32,8 @@ jobs:
         run: python 客户端/tests/test_tray.py
       - name: Test update startup failures preserve the running application
         run: python 客户端/tests/test_update_runtime.py
+      - name: Test default address migration preserves custom servers
+        run: python 客户端/tests/test_default_server.py
       - name: Test GitHub update fallback and bundled TLS trust
         run: python 服务端/tests/test_github_updates.py
       - name: Build independent Windows programs

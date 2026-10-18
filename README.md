@@ -12,16 +12,16 @@
 
 | 用途 | 安装包 | 安装方法 |
 | --- | --- | --- |
-| Windows 客户端 | `weiyan-client-2.1.2-windows-x64.msi` | 双击安装，自动添加桌面和开始菜单快捷方式 |
-| Android 客户端 | `weiyan-client-2.1.2-android.apk` | 手机下载后通过系统安装器安装 |
-| Apple Silicon Mac 服务端 | `weiyan-server-2.1.2-macos-arm64.dmg` | 打开后将应用拖到 Applications |
-| Windows 服务端 | `weiyan-server-2.1.2-windows-x64.zip` | 完整解压，双击服务端 exe |
+| Windows 客户端 | `weiyan-client-2.1.3-windows-x64.msi` | 双击安装，自动添加桌面和开始菜单快捷方式 |
+| Android 客户端 | `weiyan-client-2.1.3-android.apk` | 手机下载后通过系统安装器安装 |
+| Apple Silicon Mac 服务端 | `weiyan-server-2.1.3-macos-arm64.dmg` | 打开后将应用拖到 Applications |
+| Windows 服务端 | `weiyan-server-2.1.3-windows-x64.zip` | 完整解压，双击服务端 exe |
 
 Windows 客户端也提供便携 ZIP。ZIP 中的 `_internal` 必须与 exe 一起保留。所有安装包包含运行库，不需要安装 Python。
 
 Mac 应用仅作临时签名，尚未经过 Apple Developer ID 公证；首次打开时需在系统设置「隐私与安全性」确认来源。
 
-客户端默认连接 **`http://113.219.237.106:23074`**，之前保存的自定义连接地址会保留。该地址需要实际运行服务端并开放/转发端口；本项目发布安装包不会自动部署远程服务器。同机测试请在客户端连接设置填入 `http://127.0.0.1:23074`。
+客户端默认连接 **`https://156.225.28.175:23074`**，对应的 CentOS 服务端已部署，公网连接使用受信任的 HTTPS 证书。升级会将旧的官方默认地址迁移到此地址，之前保存的其他自定义地址会保留。同机测试请在客户端连接设置填入 `http://127.0.0.1:23074`。
 
 启动服务端后，在客户端创建账号或以访客进入；不同设备连接同一服务端即可交流。
 
@@ -77,9 +77,9 @@ Mac 应用仅作临时签名，尚未经过 Apple Developer ID 公证；首次�
 
 页面显示当前版本、GitHub 正式版本、更新说明和下载进度。更新包先通过 **Ed25519 发布签名 + SHA-256** 校验。Windows 便携版由辅助程序替换并在失败时回滚；MSI 交由 Windows Installer 升级与回滚；Android 还核对应用 ID、版本与固定签名证书，再交由系统安装器确认；Mac 挂载已校验 DMG，校验应用签名后替换应用并保留旧应用备份。用户资料位于安装包之外。
 
-Mac 更新检查使用随安装包提供的 CA 证书，保留 HTTPS 证书和主机名验证；GitHub API 不可用时尝试 GitHub Releases 的签名清单。若旧版 Mac 服务端一直提示无法连接 GitHub，请手动下载 2.1.2 DMG，退出服务端后覆盖 Applications 中的应用一次；资料目录保留。如果 GitHub 整站无法访问，仍需先修复网络或代理。
+Mac 更新检查使用随安装包提供的 CA 证书，保留 HTTPS 证书和主机名验证；GitHub API 不可用时尝试 GitHub Releases 的签名清单。若旧版 Mac 服务端一直提示无法连接 GitHub，请手动下载 2.1.3 DMG，退出服务端后覆盖 Applications 中的应用一次；资料目录保留。如果 GitHub 整站无法访问，仍需先修复网络或代理。
 
-Windows 更新前会检查更新助手启动与验签依赖，失败时保留当前程序运行。如果旧版更新时出现 `No module named '_cffi_backend'`，请从 Releases 下载 2.1.2 的 MSI，退出客户端后双击安装一次；原 Windows 账号下的聊天资料与连接设置会保留。不要卸载安卓旧版再安装，新 APK 使用相同证书，可直接覆盖升级。
+Windows 更新前会检查更新助手启动与验签依赖，失败时保留当前程序运行。如果旧版更新时出现 `No module named '_cffi_backend'`，请从 Releases 下载 2.1.3 的 MSI，退出客户端后双击安装一次；原 Windows 账号下的聊天资料与连接设置会保留。不要卸载安卓旧版再安装，新 APK 使用相同证书，可直接覆盖升级。
 
 ## 数据位置与备份
 
@@ -94,6 +94,8 @@ Windows 更新前会检查更新助手启动与验签依赖，失败时保留当
 Windows 10/11 x64，Microsoft Edge WebView2 Runtime；Android 7.0+（ARM64 或 x86_64，需可用的系统 WebView）；macOS 12+ Apple Silicon 服务端。程序打包包含 Python 运行库。安卓测试覆盖 API 35 的 4 KB 页设备，16 KB 页设备兼容性尚未验证。
 
 源码开发使用 Python 3.12，分别安装两个目录中的 requirements.txt；运行 `python 服务端/server.py` 和 `python 客户端/main.py`。无界面服务模式：`python 服务端/server.py --headless`。
+
+CentOS / Linux 服务器可使用无界面模式和独立依赖清单 `服务端/requirements-headless.txt`。提供 [systemd 部署说明](服务端/deploy/linux/部署说明.md)，源码部署包通过 `python 服务端/tools/build_linux_bundle.py` 生成。部署前需确认目标系统与运行环境；这些文件不会自动部署到公网地址。
 
 ```powershell
 python 服务端/tests/test_chat.py

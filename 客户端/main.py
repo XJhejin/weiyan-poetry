@@ -27,14 +27,26 @@ PUBLIC = ROOT / "ui"
 PROFILE = Path(os.environ.get("WEIYAN_CLIENT_DATA", str(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "WeiyanPoetry" / "client")))
 CONFIG_FILE = PROFILE / "config.json"
 CONFIG_LOCK = threading.Lock()
-DEFAULT_SERVER = "http://113.219.237.106:23074"
-CONFIG = {"server_url": DEFAULT_SERVER}
+DEFAULT_SERVER = "https://156.225.28.175:23074"
+LEGACY_DEFAULT_SERVER = "http://113.219.237.106:23074"
+DEFAULT_SERVER_REVISION = 1
+CONFIG = {"server_url": DEFAULT_SERVER, "default_server_revision": DEFAULT_SERVER_REVISION}
 
 
 def load_config():
     PROFILE.mkdir(parents=True, exist_ok=True)
     try:
-        CONFIG.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
+        saved = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        if not isinstance(saved, dict):
+            return
+        revision = saved.get("default_server_revision", 0)
+        if not isinstance(revision, int):
+            revision = 0
+        CONFIG.update(saved)
+        CONFIG["default_server_revision"] = max(revision, DEFAULT_SERVER_REVISION)
+        previous = saved.get("server_url")
+        if revision < DEFAULT_SERVER_REVISION and isinstance(previous, str) and previous.strip().rstrip("/") == LEGACY_DEFAULT_SERVER:
+            save_server(DEFAULT_SERVER)
     except (OSError, ValueError):
         pass
 
@@ -51,7 +63,7 @@ def save_server(value):
     except ValueError:
         valid = False
     if not valid:
-        raise ValueError("地址示例：http://113.219.237.106:23074")
+        raise ValueError("地址示例：https://156.225.28.175:23074")
     with CONFIG_LOCK:
         CONFIG["server_url"] = value
         temporary = CONFIG_FILE.with_suffix(".tmp")
