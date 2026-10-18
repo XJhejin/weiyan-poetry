@@ -110,8 +110,10 @@ def recall_directory(db, uid, target, error):
         raise error('消息发送已超过两分钟，无法撤回。', 409)
     rows = db.execute('''SELECT DISTINCT d.id device_id,d.user_id,d.box_key,d.sign_key,d.name,u.nickname
         FROM devices d JOIN users u ON u.id=d.user_id WHERE d.revoked=0 AND u.disabled=0 AND
-        (d.user_id=? OR d.id IN (SELECT device_id FROM receipt_targets WHERE packet_id=?)
-         OR d.id IN (SELECT device_id FROM deliveries WHERE packet_id=?)) ORDER BY d.user_id,d.id''',
+        (d.user_id=? OR d.user_id IN (SELECT user_id FROM devices WHERE id IN
+            (SELECT device_id FROM receipt_targets WHERE packet_id=?))
+         OR d.user_id IN (SELECT user_id FROM devices WHERE id IN
+            (SELECT device_id FROM deliveries WHERE packet_id=?))) ORDER BY d.user_id,d.id''',
         (uid, target['id'], target['id']))
     return original, [dict(r) for r in rows]
 

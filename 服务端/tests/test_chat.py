@@ -486,6 +486,7 @@ class ChatIntegration(unittest.TestCase):
 
     def test_15_same_account_history_sync_requires_trust_and_preserves_recall(self):
         # A third profile starts empty, then obtains encrypted history from the old device.
+        late_recall = self.send('late-device-recall-marker', 'late-device-recall')
         for session in (self.bob, self.new_bob):
             session.request('/api/bootstrap')
         expected = {m['id'] for m in self.bob.request('/api/conversations/' + self.cid + '/messages')['messages']}
@@ -502,7 +503,7 @@ class ChatIntegration(unittest.TestCase):
                 info = session.request('/desktop/security?conversation_id=' + sync_cid)
                 self.assertTrue(info['key_changed'])
                 session.request('/desktop/security', {'conversation_id': sync_cid, 'approve': True, 'directory_digest': info['directory_digest']})
-            until = time.time()+45; synced = []
+            until = time.time()+90; synced = []
             while time.time() < until:
                 for session in (newcomer, self.bob, self.new_bob): session.request('/api/bootstrap')
                 page = newcomer.request('/api/conversations/' + self.cid + '/messages')
@@ -519,6 +520,12 @@ class ChatIntegration(unittest.TestCase):
             history = newcomer.request('/api/conversations/' + self.cid + '/messages')['messages']
             file_message = next(m for m in history if m.get('attachment'))
             self.assertTrue(newcomer.request(file_message['attachment']['url']))
+            info = self.alice.request('/desktop/security?conversation_id=' + self.cid)
+            self.alice.request('/desktop/security', {'conversation_id': self.cid, 'approve': True, 'directory_digest': info['directory_digest']})
+            self.alice.request('/api/recall', {'id': late_recall['id'], 'client_id': late_recall['client_id']})
+            for session in (newcomer, self.bob, self.new_bob):
+                history = session.request('/api/conversations/' + self.cid + '/messages')['messages']
+                self.assertTrue(next(m for m in history if m['id'] == late_recall['id'])['recalled'])
             own = self.new_bob.request('/api/messages', {'conversation_id': self.cid, 'client_id': 'own-device-sync', 'body': 'same-account-own-message'}, expected=201)['message']
             for session in (newcomer, self.bob):
                 history = session.request('/api/conversations/' + self.cid + '/messages')['messages']

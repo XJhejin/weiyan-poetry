@@ -57,6 +57,13 @@ for device in (b, new):
     directory, changed, digest = device.directory(sync_cid)
     assert changed
     device.directory(sync_cid, approve=True, expected=digest)
+new.sync_tick()
+before = new.remote('/api/inbox?device_id=' + b.device_id)['items']
+for _ in range(3):
+    new.sync_time = 0
+    new.sync_tick()
+after = new.remote('/api/inbox?device_id=' + b.device_id)['items']
+assert [item['id'] for item in before] == [item['id'] for item in after], 'Offline history requests must not duplicate queued ciphertext'
 for _ in range(20):
     new.receive()
     b.receive()

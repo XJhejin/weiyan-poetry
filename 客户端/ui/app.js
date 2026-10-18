@@ -205,6 +205,7 @@ function isNearBottom() { const el=$('#message-scroll'); return el.scrollHeight-
 function scrollBottom() { const el=$('#message-scroll'); el.scrollTop=el.scrollHeight; $('#new-message-button').hidden=true; }
 function markRead() {
   if(!state.active || !state.me || document.hidden) return;
+  if(innerWidth<=620&&!$('#app').classList.contains('mobile-chat'))return;
   const ids=[...state.messages.keys()]; if(!ids.length) return;
   const last=Math.max(...ids), cid=state.active;
   post('/api/read',{conversation_id:cid,last_id:last}).then(()=>{const c=state.conversations.find(c=>c.id===cid);if(c){c.unread=0;renderList();}}).catch(()=>{});
@@ -223,7 +224,7 @@ function receiveMessage(m) {
   if(!conv) { scheduleSync(); return; }
   if(conv.last_message?.id===m.id && state.messages.has(m.id)) return;
   conv.last_message=m;
-  const visible=m.conversation_id===state.active && !document.hidden;
+  const visible=m.conversation_id===state.active && !document.hidden && (innerWidth>620||$('#app').classList.contains('mobile-chat'));
   if(m.sender.id!==state.me.id && !visible) {conv.unread++;notify(m,conv);}
   if(m.conversation_id===state.active) {
     const bottom=isNearBottom(); state.messages.set(m.id,m); renderMessages();

@@ -406,7 +406,11 @@ class SecureClient:
             if not progress['done']:
                 clear = {'type': 'sync_request', 'after': progress['after'], 'until': progress.get('until')}
                 targets = [d for d in directory if d['device_id'] in (did, self.device_id)]
-                self.control_send(cid, 'sync-' + secrets.token_hex(16), clear, targets, sync_to=did)
+                request = self.vault.get('sync_request', did)
+                if request is None or request['after'] != progress['after'] or request.get('until') != progress.get('until'):
+                    request = {**clear, 'client_id': 'sync-' + secrets.token_hex(16)}
+                    self.vault.put('sync_request', did, request)
+                self.control_send(cid, request['client_id'], clear, targets, sync_to=did)
 
     def sync_control(self, packet, clear, directory):
         if packet['sender_id'] != self.me['id'] or packet.get('sync_to') != self.device_id or packet['conversation_id'] != 'sync:' + self.me['id']:
@@ -438,7 +442,7 @@ class SecureClient:
                     break
                 entries.append(entry)
                 size += length
-            response = {'type': 'sync_batch', 'after': after, 'until': until, 'entries': entries,
+            response = {'type': 'sync_batch', 'request_id': packet['client_id'], 'after': after, 'until': until, 'entries': entries,
                         'done': len(entries) < 8 and len(entries) == len(rows)}
             targets = [d for d in directory if d['device_id'] in (peer, self.device_id)]
             self.control_send(packet['conversation_id'], 'batch-' + hashlib.sha256(packet['client_id'].encode()).hexdigest(), response, targets, sync_to=peer)
@@ -478,6 +482,9 @@ class SecureClient:
                     self.vault.put('read', cid, max(self.vault.get('read', cid, 0), stored['id']))
         if cursor >= progress['after']:
             self.vault.put('sync_progress', peer, {'after': cursor, 'until': until, 'done': bool(clear.get('done'))})
+        request = self.vault.get('sync_request', peer)
+        if request and request['client_id'] == clear.get('request_id'):
+            self.vault.delete('sync_request', peer)
         self.sync_time = 0
         return result
 
@@ -568,10 +575,11 @@ class SecureClient:
     def receive(self):
         with self.receive_lock:
             result, after, cache = [], 0, {}
+            started = time.monotonic()
             for _ in range(32):
                 messages, after, count = self._receive_page(after, cache)
                 result.extend(messages)
-                if count < 12:
+                if count < 12 or time.monotonic() - started > 2:
                     break
             try:
                 self.sync_tick()
@@ -582,8 +590,12 @@ class SecureClient:
 
     def _receive_page(self, after, cache):
             result = []
+            started, last, processed = time.monotonic(), after, 0
             inbox = self.remote("/api/inbox?device_id=" + self.device_id + "&after=" + str(after))
             for item in inbox["items"]:
+                if processed and time.monotonic() - started > 1:
+                    break
+                last, processed = item['id'], processed + 1
                 packet = item["envelope"]
                 cid = packet["conversation_id"]
                 try:
@@ -638,8 +650,7 @@ class SecureClient:
                 except (CryptoError, BadSignatureError, KeyError, TypeError, ValueError) as error:
                     self.blocked = {"conversation_id": cid, "error": str(error)}
                     # Keep the ciphertext queued; an unverified message never enters history.
-            items = inbox['items']
-            return result, items[-1]['id'] if items else after, len(items)
+            return result, last, processed
 
     def bootstrap(self, data):
         self.me = data["me"]
