@@ -624,7 +624,11 @@ def main():
     parser.add_argument("--browser", action="store_true", help="浏览器预览管理界面")
     parser.add_argument("--admin-port", type=int, default=0)
     parser.add_argument("--no-open", action="store_true")
+    parser.add_argument('--check-update-runtime', metavar='REPORT', help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.check_update_runtime:
+        from update import diagnose_windows_update_runtime
+        return diagnose_windows_update_runtime(args.check_update_runtime)
     initialize()
     with connect() as db:
         args.host = args.host or relay.setting(db, 'listen_host', '0.0.0.0')

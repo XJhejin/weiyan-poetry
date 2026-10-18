@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +23,49 @@ from release_config import VERSION, REPOSITORY, RELEASE_PUBLIC_KEY
 
 MAX_DOWNLOAD = 250 * 1024 * 1024
 MANIFEST_DOMAIN = b"WeiyanPoetry/release/v1\0"
+
+
+def windows_runtime_environment():
+    # A copied one-file helper and a restarted app must own their extraction
+    # directory rather than inherit the lifetime of the process being replaced.
+    env = os.environ.copy()
+    env['PYINSTALLER_RESET_ENVIRONMENT'] = '1'
+    return env
+
+
+def prepare_windows_helper(folder):
+    helper = Path(__file__).resolve().parent / 'update_helper.exe'
+    if not helper.is_file():
+        raise ValueError('缺少更新辅助程序，请重新下载完整软件。')
+    folder = Path(folder)
+    installer, report = folder / 'install.exe', folder / 'runtime-check.json'
+    shutil.copy2(helper, installer)
+    report.unlink(missing_ok=True)
+    try:
+        subprocess.run([str(installer), '--self-test', str(report)], cwd=str(folder),
+                       env=windows_runtime_environment(), creationflags=subprocess.CREATE_NO_WINDOW,
+                       timeout=45, check=True, capture_output=True)
+        result = json.loads(report.read_text(encoding='utf-8'))
+        if (result.get('status') != 'ok' or result.get('protocol') != 1
+                or result.get('version') != VERSION or result.get('frozen') is not True
+                or result.get('signature_runtime') is not True):
+            raise ValueError('更新辅助程序自检结果无效。')
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise ValueError('更新组件启动检查失败，原程序保持运行。请重新下载安装包后升级。') from error
+    return installer
+
+
+def diagnose_windows_update_runtime(report_path):
+    """Exercise the production helper launch from the actual frozen application."""
+    report_path = Path(report_path).resolve()
+    try:
+        with tempfile.TemporaryDirectory(prefix='weiyan-update-runtime-') as folder:
+            prepare_windows_helper(folder)
+            result = json.loads((Path(folder) / 'runtime-check.json').read_text('utf-8'))
+    except Exception as error:
+        result = {'status': 'error', 'message': str(error)}
+    report_path.write_text(json.dumps(result), encoding='utf-8')
+    return 0 if result['status'] == 'ok' else 1
 
 
 def canonical(value):
@@ -187,14 +231,12 @@ class Updater:
                 return self._install_macos(archive, folder)
             if self.package_key != 'client_windows_msi':
                 validate_archive(archive, self.kind)
-            helper = Path(__file__).resolve().parent / "update_helper.exe"
-            if not helper.is_file():
-                raise ValueError("缺少更新辅助程序，请重新下载完整软件。")
-            shutil.copy2(helper, folder / "install.exe")
+            installer = prepare_windows_helper(folder)
             target = Path(sys.executable).resolve().parent
             job = {"kind": self.kind, "package_key": self.package_key, "manifest": self.release["manifest"], "target": str(target), "parent_pid": os.getpid(), "archive": str(archive)}
             (folder / "job.json").write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
-            subprocess.Popen([str(folder / "install.exe"), str(folder / "job.json")], creationflags=subprocess.CREATE_NO_WINDOW, cwd=str(folder))
+            subprocess.Popen([str(installer), str(folder / "job.json")], creationflags=subprocess.CREATE_NO_WINDOW,
+                             cwd=str(folder), env=windows_runtime_environment())
             self.progress = {"stage": "installing", "percent": 100, "message": "验证通过，正在重启安装…"}
             time.sleep(1.5)
             if self.before_exit:
@@ -285,7 +327,7 @@ def apply_update(job_path):
         code = subprocess.run(['msiexec.exe', '/i', str(archive), '/passive', 'REBOOT=ReallySuppress'], check=False).returncode
         if code not in (0, 3010):
             raise ValueError(f'Windows Installer 未完成安装（{code}），原版本与资料已保留。')
-        subprocess.Popen([str(target / entry)], cwd=str(target))
+        subprocess.Popen([str(target / entry)], cwd=str(target), env=windows_runtime_environment())
         (folder / 'result.txt').write_text('更新成功 ' + signed['version'], encoding='utf-8')
         return
     unpacked.mkdir(exist_ok=True)
@@ -305,7 +347,7 @@ def apply_update(job_path):
                 old.rename(backup / name)
             changed.append(name)
             shutil.move(str(fresh), str(old))
-        subprocess.Popen([str(target / entry)], cwd=str(target))
+        subprocess.Popen([str(target / entry)], cwd=str(target), env=windows_runtime_environment())
         (folder / "result.txt").write_text("更新成功 " + signed["version"], encoding="utf-8")
     except Exception:
         for name in reversed(changed):
@@ -316,5 +358,5 @@ def apply_update(job_path):
                 installed.unlink()
             if (backup / name).exists():
                 shutil.move(str(backup / name), str(installed))
-        subprocess.Popen([str(target / entry)], cwd=str(target))
+        subprocess.Popen([str(target / entry)], cwd=str(target), env=windows_runtime_environment())
         raise

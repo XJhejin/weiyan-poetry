@@ -5,6 +5,7 @@ from importlib import metadata
 import shutil
 import subprocess
 import sys
+from PyInstaller.archive.readers import CArchiveReader
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +47,8 @@ def build(staging_only=False):
     subprocess.run(common + ['--workpath', str(ROOT / '.build' / 'updater'), '--name', 'update_helper', '--windowed', '--onefile',
                              '--paths', str(ROOT / '客户端'), str(ROOT / '客户端' / 'tools' / 'update_helper.py')], cwd=ROOT, check=True)
     helper = staging / 'update_helper.exe'
+    if not any(name.startswith('_cffi_backend.') for name in CArchiveReader(str(helper)).toc):
+        raise RuntimeError('更新助手缺少 _cffi_backend，已阻止生成安装包。')
     subprocess.run(common + ["--workpath", str(ROOT / ".build" / "client"), "--name", "未言诗集", "--windowed", "--onedir",
                             "--add-data", f"{ROOT / '客户端' / 'ui'};ui", '--add-data', f'{helper};.', "--collect-all", "webview",
                             str(ROOT / "客户端" / "main.py")], cwd=ROOT, check=True)

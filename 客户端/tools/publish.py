@@ -41,6 +41,11 @@ def prepare():
         raise SystemExit('请先统一客户端和服务端的版本、仓库与发布公钥。')
     if (ROOT / '客户端/update.py').read_bytes() != (ROOT / '服务端/update.py').read_bytes():
         raise SystemExit('两份更新程序必须一致。')
+    if os.name == 'nt':
+        env = os.environ.copy()
+        env['WEIYAN_TEST_BINARIES'] = '1'
+        subprocess.run([sys.executable, str(ROOT / '客户端/tests/test_update_runtime.py')],
+                       cwd=ROOT, env=env, check=True)
     config = values[0]
     key_file = Path(os.environ['LOCALAPPDATA']) / 'WeiyanPoetry/maintainer/release-signing.dpapi'
     key = SigningKey(protect(key_file.read_bytes(), decrypt=True))
@@ -122,6 +127,8 @@ def main():
 - Windows 客户端与服务端便携 ZIP 继续提供；完整解压并保留 `_internal`，无需安装 Python。
 
 功能：
+- 2.1.1 修复 Windows 旧版更新助手缺少 `_cffi_backend` 的启动错误；更新前检查独立助手及验签依赖，自检失败保留当前程序运行。
+- 若旧版自动更新已报上述错误，请先下载本页 MSI，退出客户端后安装一次；Windows 原账号下的本机资料与连接设置保留。
 - 个人与群头像图片选择、拖动裁剪及缩放；服务端同步头像，管理页可查看并重置成员头像。
 - 单一公共房间「-扉页-」，好友申请与同意，@用户名/昵称搜索，可直接与非好友私聊。
 - 群聊邀请、群主与管理员、踢出、群名称/头像/公告、禁言、群昵称、群主转让、退群与解散。

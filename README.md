@@ -12,10 +12,10 @@
 
 | 用途 | 安装包 | 安装方法 |
 | --- | --- | --- |
-| Windows 客户端 | `weiyan-client-2.1.0-windows-x64.msi` | 双击安装，自动添加桌面和开始菜单快捷方式 |
-| Android 客户端 | `weiyan-client-2.1.0-android.apk` | 手机下载后通过系统安装器安装 |
-| Apple Silicon Mac 服务端 | `weiyan-server-2.1.0-macos-arm64.dmg` | 打开后将应用拖到 Applications |
-| Windows 服务端 | `weiyan-server-2.1.0-windows-x64.zip` | 完整解压，双击服务端 exe |
+| Windows 客户端 | `weiyan-client-2.1.1-windows-x64.msi` | 双击安装，自动添加桌面和开始菜单快捷方式 |
+| Android 客户端 | `weiyan-client-2.1.1-android.apk` | 手机下载后通过系统安装器安装 |
+| Apple Silicon Mac 服务端 | `weiyan-server-2.1.1-macos-arm64.dmg` | 打开后将应用拖到 Applications |
+| Windows 服务端 | `weiyan-server-2.1.1-windows-x64.zip` | 完整解压，双击服务端 exe |
 
 Windows 客户端也提供便携 ZIP。ZIP 中的 `_internal` 必须与 exe 一起保留。所有安装包包含运行库，不需要安装 Python。
 
@@ -73,6 +73,8 @@ Mac 应用仅作临时签名，尚未经过 Apple Developer ID 公证；首次�
 客户端“设置→软件更新”或登录页底部“检查更新”；服务端左侧“软件更新”。
 
 页面显示当前版本、GitHub 正式版本、更新说明和下载进度。更新包先通过 **Ed25519 发布签名 + SHA-256** 校验。Windows 便携版由辅助程序替换并在失败时回滚；MSI 交由 Windows Installer 升级与回滚；Android 还核对应用 ID、版本与固定签名证书，再交由系统安装器确认；Mac 挂载已校验 DMG，校验应用签名后替换应用并保留旧应用备份。用户资料位于安装包之外。
+
+2.1.1 增加 Windows 更新助手启动与验签自检，失败时保留当前程序运行。如果旧版更新时出现 `No module named '_cffi_backend'`，请从 Releases 下载 2.1.1 的 MSI，退出客户端后双击安装一次；原 Windows 账号下的聊天资料与连接设置会保留。不要卸载安卓旧版再安装，新 APK 使用相同证书，可直接覆盖升级。
 
 ## 数据位置与备份
 

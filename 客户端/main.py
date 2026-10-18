@@ -520,7 +520,11 @@ def main():
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--server", help="设置服务端地址")
     parser.add_argument("--no-open", action="store_true")
+    parser.add_argument('--check-update-runtime', metavar='REPORT', help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.check_update_runtime:
+        from update import diagnose_windows_update_runtime
+        raise SystemExit(diagnose_windows_update_runtime(args.check_update_runtime))
     load_config()
     if args.server:
         save_server(args.server)
