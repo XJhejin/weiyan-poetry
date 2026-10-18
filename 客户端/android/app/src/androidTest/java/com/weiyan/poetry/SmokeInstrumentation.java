@@ -35,15 +35,17 @@ public class SmokeInstrumentation extends Instrumentation {
             for(int i=0;i<200&&web==null;i++){AtomicReference<WebView> found=new AtomicReference<>();runOnMainSync(()->found.set(find(activity.getWindow().getDecorView())));web=found.get();if(web==null)Thread.sleep(250);}
             if(web==null)throw new AssertionError("Native application failed to start");
             waitJs(web,"typeof state !== 'undefined' && typeof chooseAttachment==='function' && typeof openGroupInfo==='function' && typeof openFriendRequests==='function'");
-            if(web.getSettings().supportZoom()||web.getSettings().getBuiltInZoomControls())throw new AssertionError("Phone pinch zoom must be disabled");
             final WebView phoneWeb=web;
+            AtomicReference<String> layoutError=new AtomicReference<>();
             runOnMainSync(()->{
+                if(phoneWeb.getSettings().supportZoom()||phoneWeb.getSettings().getBuiltInZoomControls())layoutError.set("Phone pinch zoom must be disabled");
                 android.view.WindowInsets insets=phoneWeb.getRootWindowInsets();
-                if(insets==null)throw new AssertionError("Missing phone safe-area insets");
+                if(insets==null){layoutError.set("Missing phone safe-area insets");return;}
                 int safeTop=insets.getInsets(android.view.WindowInsets.Type.systemBars()|android.view.WindowInsets.Type.displayCutout()).top;
                 int spacing=Math.round(8*phoneWeb.getResources().getDisplayMetrics().density);
-                if(phoneWeb.getPaddingTop()<safeTop+spacing)throw new AssertionError("Chat overlaps status bar or display cutout");
+                if(phoneWeb.getPaddingTop()<safeTop+spacing)layoutError.set("Chat overlaps status bar or display cutout");
             });
+            if(layoutError.get()!=null)throw new AssertionError(layoutError.get());
             String base=args.getString("server","http://10.0.2.2:23180");
             js(web,"fetch('/desktop/config').then(r=>r.json()).then(c=>{window.defaultCorrect=c.server_url==='http://113.219.237.106:23074';return post('/desktop/config',{server_url:'"+base+"'});}).then(()=>{window.configured=true;})");
             waitJs(web,"window.configured===true");
