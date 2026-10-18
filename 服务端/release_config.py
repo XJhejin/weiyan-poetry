@@ -1,0 +1,3 @@
+VERSION = "2.0.0"
+REPOSITORY = "XJhejin/weiyan-poetry"
+RELEASE_PUBLIC_KEY = "FA7oHT0huyw9NyXuPjBNvLGm3Va3DFejXMjjVJbH5vU="

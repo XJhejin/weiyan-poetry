@@ -1,0 +1,39 @@
+'use strict';
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let state=null,timer,busy=false,update=null;
+function toast(s){$('#toast').textContent=s;$('#toast').hidden=false;clearTimeout(timer);timer=setTimeout(()=>$('#toast').hidden=true,3500);}
+async function api(path,data){const r=await fetch(path,{method:data?'POST':'GET',cache:'no-store',headers:{'Content-Type':'application/json','X-Weiyan-Admin':'desktop'},body:data?JSON.stringify(data):undefined});const v=await r.json();if(!r.ok)throw new Error(v.error||'操作失败');return v;}
+const titles={overview:['运行概览','掌握服务状态，让每一次交流顺畅抵达。'],accounts:['账号与设备','管理成员身份与设备，让连接井然有序。'],privacy:['隐私与存储','明确保存规则，让数据各有所归。'],updates:['软件更新','查看正式版本，获取新的功能与修复。']};
+function tab(id){$$('.page').forEach(p=>p.hidden=p.id!==id);$$('[data-tab]').forEach(b=>b.classList.toggle('selected',b.dataset.tab===id));$('#page-title').textContent=titles[id][0];$('#page-description').textContent=titles[id][1];}
+$$('[data-tab]').forEach(b=>b.onclick=()=>tab(b.dataset.tab));$$('[data-go]').forEach(b=>b.onclick=()=>tab(b.dataset.go));
+function date(v){return new Date(typeof v==='number'?v*1000:v).toLocaleString('zh-CN',{hour12:false});}
+function confirmAction(title,text){$('#confirm-title').textContent=title;$('#confirm-text').textContent=text;$('#confirm').showModal();return new Promise(resolve=>{$('#confirm-cancel').onclick=()=>{$('#confirm').close();resolve(false);};$('#confirm-ok').onclick=()=>{$('#confirm').close();resolve(true);};$('#confirm').oncancel=()=>resolve(false);});}
+async function refresh(){if(busy)return;try{state=await api('/manage/state');render();}catch(e){$('#service-state').textContent='管理连接暂时中断';$('#status-dot').classList.add('off');}}
+function render(){
+  $('#service-state').textContent=state.running?'服务正在运行':'服务已停止';$('#status-dot').classList.toggle('off',!state.running);
+  $('#stat-online').textContent=state.online;$('#stat-connections').textContent=state.sessions.length+' 个连接';$('#stat-accounts').textContent=state.accounts.length;$('#stat-queue').textContent=state.queued;$('#stat-size').textContent=(state.queue_bytes/1024).toFixed(1)+' KB 暂存空间';
+  const t=state.uptime;$('#stat-uptime').textContent=[Math.floor(t/3600),Math.floor(t/60)%60,t%60].map(v=>String(v).padStart(2,'0')).join(':');
+  $('#listen-host').disabled=state.running;$('#listen-port').disabled=state.running;if(document.activeElement!==$('#listen-host'))$('#listen-host').value=state.host;if(document.activeElement!==$('#listen-port'))$('#listen-port').value=state.port;
+  $('#service-control').textContent=state.running?'停止服务':'启动服务';$('#control-note').textContent=state.running?'运行中如需修改配置，请先停止服务。':'启动后，客户端即可连接此服务。';$('#service-error').textContent=state.error;
+  $('#address-list').innerHTML=state.addresses.map((a,i)=>`<div class="address"><div><small>${i===0?'本机':'局域网'}</small><br><code>${esc(a)}</code></div><button data-copy="${esc(a)}">复制</button></div>`).join('');
+  $('#live-devices').innerHTML=state.devices.filter(d=>d.online&&!d.revoked).map(d=>`<div class="live-device"><span>♧</span><div><b>${esc(d.nickname)}</b><small>${esc(d.name)} · ${esc(d.id.slice(0,8))}</small></div></div>`).join('')||'<p>暂无在线设备，等待成员连接。</p>';
+  renderAccounts();
+  if(!$('#policy-form').contains(document.activeElement)){$('#allow-registration').checked=state.settings.registration==='1';}
+  $('#data-path').textContent=state.data_dir;
+}
+function renderAccounts(){if(!state)return;const q=$('#account-search').value.toLowerCase();const accounts=state.accounts.filter(a=>(a.username+' '+a.nickname).toLowerCase().includes(q));$('#accounts-empty').hidden=accounts.length>0;
+  $('#account-rows').innerHTML=accounts.map(a=>`<tr><td><b>${esc(a.nickname)}</b><small>@${esc(a.username)}</small></td><td><span class="pill${a.disabled?' rose':''}">${a.disabled?'已停用':state.sessions.some(s=>s.user_id===a.id)?'在线':'正常'}</span>${a.is_guest?' <span class="pill muted">访客</span>':''}</td><td>${state.devices.filter(d=>d.user_id===a.id&&!d.revoked).length} 台</td><td>${esc(date(a.created_at))}</td><td><button data-account="${a.id}" data-op="${a.disabled?'enable':'disable'}">${a.disabled?'启用':'停用'}</button><button data-account="${a.id}" data-op="disconnect">退出登录</button></td></tr>`).join('');
+  $('#device-rows').innerHTML=state.devices.filter(d=>!d.revoked&&(!q||(d.username+' '+d.nickname).toLowerCase().includes(q))).map(d=>`<tr><td>${esc(d.nickname)}<small>@${esc(d.username)}</small></td><td class="mono" title="${esc(d.id)}">${esc(d.id.slice(0,16))}…</td><td><span class="pill${d.online?'':' muted'}">${d.online?'在线':'离线'}</span></td><td>${esc(date(d.last_seen))}</td><td><button data-account="${d.user_id}" data-device="${d.id}" data-op="revoke">撤销设备</button></td></tr>`).join('');
+}
+$('#account-search').oninput=renderAccounts;
+document.addEventListener('click',async e=>{const c=e.target.closest('[data-copy]');if(c){try{await navigator.clipboard.writeText(c.dataset.copy);toast('地址已复制');}catch{toast('请选中地址后按 Ctrl+C 复制');}return;}const b=e.target.closest('[data-op]');if(!b)return;
+ const labels={disable:['停用账号','停用后将退出该账号的所有连接，并暂停接收新消息。'],enable:['启用账号','启用后，该账号可重新登录。'],disconnect:['退出账号登录','将使该账号的所有设备退出登录，成员需要重新输入密码。访客账号请先转为正式账号。'],revoke:['撤销加密设备','该设备将无法继续接收消息，分配给它的离线密文将被移除。此操作不能恢复原设备密钥的权限。']};
+ if(!await confirmAction(...labels[b.dataset.op]))return;try{await api('/manage/action',{action:b.dataset.op,user_id:b.dataset.account,device_id:b.dataset.device});toast('操作已完成');await refresh();}catch(err){toast(err.message);}});
+$('#service-control').onclick=async()=>{if(!state)return;const stop=state.running;if(stop&&!await confirmAction('停止聊天服务','当前连接将会断开；账号和未投递密文会保留，重新启动后可继续投递。'))return;busy=true;$('#service-control').disabled=true;try{await api('/manage/action',stop?{action:'stop'}:{action:'start',host:$('#listen-host').value,port:Number($('#listen-port').value)});toast(stop?'服务已停止':'服务已启动');}catch(e){toast(e.message);}finally{busy=false;$('#service-control').disabled=false;await refresh();}};
+$('#policy-form').onsubmit=async e=>{e.preventDefault();try{await api('/manage/action',{action:'settings',registration:$('#allow-registration').checked});toast('设置已保存');await refresh();}catch(err){toast(err.message);}};
+$('#check-update').onclick=async()=>{const b=$('#check-update');b.disabled=true;$('#update-state').textContent='正在连接 GitHub 检查更新…';try{update=await api('/manage/update/check',{});$('#current-version').textContent='当前 '+update.current;$('#update-state').textContent=update.message;$('#update-repo').textContent=update.repository;$('#update-details').hidden=!update.latest;$('#latest-version').textContent=update.latest?'版本 '+update.latest:'';$('#release-notes').textContent=update.notes||'';$('#install-update').hidden=!update.available;}catch(e){$('#update-state').textContent=e.message;}finally{b.disabled=false;}};
+$('#install-update').onclick=async()=>{if(!await confirmAction('安装服务端更新','下载并验证更新后，将停止服务并重启管理窗口。账号、本机配置和离线密文队列会保留。'))return;$('#install-update').disabled=true;$('#update-progress').hidden=false;$('#update-progress').textContent='正在下载并校验签名与文件完整性，请保持窗口开启…';try{await api('/manage/update/install',{});const poll=setInterval(async()=>{try{const p=await api('/manage/update/status');$('#update-progress').textContent=p.message+(p.stage==='downloading'?' · '+p.percent+'%':'');if(['error','installing'].includes(p.stage)){clearInterval(poll);if(p.stage==='error')$('#install-update').disabled=false;}}catch{clearInterval(poll);}},800);}catch(e){$('#update-progress').textContent=e.message;$('#install-update').disabled=false;}};
+refresh();setInterval(refresh,4000);
+
+api("/manage/update/info").then(i=>{$$(".version").forEach(e=>e.textContent=i.current);$("#current-version").textContent="当前 "+i.current;$("#update-repo").textContent=i.repository;}).catch(()=>{});

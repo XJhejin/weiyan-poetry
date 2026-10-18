@@ -1,0 +1,41 @@
+name: Windows tests and build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -r 客户端/requirements.txt -r 客户端/tools/requirements.txt
+      - name: Test chat, encryption and offline history
+        run: python 服务端/tests/test_chat.py
+      - name: Test administration, migration and signed updates
+        run: python 服务端/tests/test_privacy_tools.py
+      - name: Build independent Windows programs
+        run: python 客户端/tools/build.py
+      - name: Test actual executables
+        env:
+          WEIYAN_TEST_BINARIES: '1'
+        run: python 服务端/tests/test_chat.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weiyan-windows-unsigned
+          path: |
+            build-output/未言诗集/
+            build-output/未言诗集服务端/
+          retention-days: 7
