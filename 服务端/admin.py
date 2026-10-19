@@ -86,6 +86,7 @@ class Controller:
             accounts = [{**self.core.public_user(row), "disabled": bool(row["disabled"]), "created_at": row["created_at"]} for row in db.execute("SELECT * FROM users WHERE id!='system' ORDER BY created_at DESC")]
             devices = [dict(row) for row in db.execute("SELECT d.id,d.user_id,d.name,d.created_at,d.last_seen,d.revoked,u.nickname,u.username FROM devices d JOIN users u ON u.id=d.user_id ORDER BY d.last_seen DESC")]
             total, size = db.execute("SELECT COUNT(*),COALESCE(SUM(length(envelope)),0) FROM relay_packets").fetchone()
+            size += db.execute('SELECT COALESCE(SUM(length(ciphertext)),0) FROM blob_parts').fetchone()[0]
             settings = {"registration": self.core.relay.setting(db, "registration")}
             privacy = self.core.relay.privacy(db)
         with self.core.EVENTS.lock:

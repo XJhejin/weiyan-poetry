@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 import webbrowser
 import relay_core as relay
+blob_relay = relay.blob_relay
 import groups
 import friends
 from avatars import COLORS, normalize_avatar
@@ -262,7 +263,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError("请求长度不正确。")
         if length < 0 or length > MAX_BODY:
             self.close_connection = True
-            raise ApiError("文件太大了，请选择 5 MB 以内的图片。", 413)
+            raise ApiError("消息请求过大，大附件请使用分片上传。", 413)
         try:
             obj = json.loads(self.rfile.read(length))
         except (ValueError, UnicodeDecodeError):
@@ -305,11 +306,22 @@ class Handler(BaseHTTPRequestHandler):
             path = unquote(parsed.path)
             params = parse_qs(parsed.query)
             if path == "/api/health":
-                return self.json_response({"ok": True, "app": "未言诗集", "version": VERSION, "privacy": self.privacy()})
+                return self.json_response({"ok": True, "app": "未言诗集", "version": VERSION, "privacy": self.privacy(), "attachments": {"protocol": 1, "max_size": blob_relay.MAX_SIZE, "chunk_size": blob_relay.CHUNK_SIZE}})
             if path.startswith("/api/") or path.startswith("/uploads/"):
                 with connect() as db:
                     me = self.auth(db)
                     uid = me["id"]
+                    blob_match = re.fullmatch(r'/api/blobs/([0-9a-f]{32})/(\d+)', path)
+                    if blob_match:
+                        raw = blob_relay.get(db, uid, blob_match[1], int(blob_match[2]), params.get('device_id', [''])[0], ApiError)
+                        self.send_response(200)
+                        self.security_headers()
+                        self.send_header('Content-Type', 'application/octet-stream')
+                        self.send_header('Cache-Control', 'no-store')
+                        self.send_header('Content-Length', str(len(raw)))
+                        self.end_headers()
+                        self.wfile.write(raw)
+                        return
                     if path == "/api/socket":
                         device_id = params.get('device_id', [''])[0]
                         if not db.execute('SELECT 1 FROM devices WHERE id=? AND user_id=? AND revoked=0', (device_id, uid)).fetchone():
@@ -379,6 +391,18 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.check_origin()
             path = urlsplit(self.path).path
+            blob_match = re.fullmatch(r'/api/blobs/([0-9a-f]{32})/(\d+)', path)
+            if blob_match:
+                if self.headers.get_content_type() != 'application/octet-stream':
+                    raise ApiError('附件分片格式不正确。', 415)
+                length = int(self.headers.get('Content-Length', '-1'))
+                if not 0 <= length <= blob_relay.CHUNK_SIZE + blob_relay.OVERHEAD:
+                    self.close_connection = True
+                    raise ApiError('附件分片过大。', 413)
+                raw = self.rfile.read(length)
+                with connect() as db:
+                    me = self.auth(db)
+                    return self.json_response(blob_relay.put(db, me['id'], blob_match[1], int(blob_match[2]), raw, ApiError))
             payload = self.body()
             with connect() as db:
                 if path in ("/api/register", "/api/login", "/api/guest"):
@@ -412,6 +436,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response({"me": public_user(row)}, cookie=cookie)
                 me = self.auth(db)
                 uid = me["id"]
+                if path == '/api/blobs':
+                    return self.json_response(blob_relay.create(db, uid, payload, ApiError))
+                if path == '/api/blobs/cancel':
+                    return self.json_response(blob_relay.cancel(db, uid, payload.get('id'), ApiError))
                 if path in ('/api/friends', '/api/contacts'):
                     rate_limit(('friend', uid), 40)
                     return self.json_response(friends.action(db, uid, payload, sys.modules[__name__]))

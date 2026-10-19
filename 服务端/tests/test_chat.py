@@ -64,6 +64,18 @@ class Session:
         cookie = "; ".join(f"{c.name}={c.value}" for c in self.cookies)
         return PortAwareClient.connect(self.base.replace("http", "ws", 1) + "/api/socket", headers={"Cookie": cookie, "Origin": self.base})
 
+    def binary(self, path, data=None, expected=200, **extra):
+        headers = {'Content-Type': 'application/octet-stream', 'X-Weiyan-Client': 'web', 'Origin': self.base, **extra}
+        req = urllib.request.Request(self.base + path, data=data, headers=headers)
+        try:
+            response = self.opener.open(req, timeout=30)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            body = response.read()
+            assert response.status == expected, (path, response.status, body[:400])
+            return body, response.headers
+
 
 class ClosingConnection(sqlite3.Connection):
     def __exit__(self,*args):
@@ -71,7 +83,7 @@ class ClosingConnection(sqlite3.Connection):
         finally:self.close()
 
 
-class ChatIntegration(unittest.TestCase):
+class ChatHarness(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="weiyan-e2ee-")
@@ -174,6 +186,7 @@ class ChatIntegration(unittest.TestCase):
     def raw_server(self,session):
         remote=Session(self.server_base);remote.cookies=session.cookies;remote.opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(remote.cookies));return remote
 
+class ChatIntegration(ChatHarness):
     def test_01_auth_separation_and_key_custody(self):
         self.assertIn(b'app.js',Session(self.client_base).request('/'))
         self.assertEqual(Session(self.server_base).request('/')['app'],'未言诗集服务端')
@@ -546,6 +559,174 @@ class ChatIntegration(unittest.TestCase):
                     self.assertNotIn(b'same-account-own-message', row[0]); self.assertNotIn(b'private-attachment', row[0])
         finally:
             self.stop_process(process)
+
+
+class LargeAttachmentIntegration(ChatHarness):
+    chunk = 1024 ** 2
+
+    def prepare(self, raw, kind='file', name='encrypted.bin', client=None):
+        client = client or self.alice
+        asset = client.request('/desktop/attachments/start', {'name': name, 'size': len(raw), 'kind': kind})
+        for index in range(asset['parts']):
+            part = raw[index*self.chunk:(index+1)*self.chunk]
+            client.binary('/desktop/attachments/chunk?asset='+asset['id']+'&index='+str(index), part)
+        return client.request('/desktop/attachments/finish', {'id': asset['id']})
+
+    def received_file(self, session, mid):
+        messages = self.history_until(session, lambda messages: any(m['id']==mid for m in messages))['messages']
+        file = next(m for m in messages if m['id']==mid)['attachment']
+        asset = file['url'].rsplit('/', 1)[-1]
+        until = time.time()+60
+        while time.time() < until:
+            status = session.request('/desktop/attachments/status?ids='+asset)[asset]
+            if status['ready']: return file
+            time.sleep(.1)
+        self.fail('Encrypted attachment download did not complete: '+str(status))
+
+    def test_01_ten_gib_boundary_and_explicit_cancel(self):
+        maximum = 10 * 1024**3
+        self.assertEqual(self.raw_server(self.alice).request('/api/health')['attachments']['max_size'], maximum)
+        for kind in ('file', 'image', 'video'):
+            value = {'name': 'limit.bin', 'size': maximum, 'kind': kind}
+            asset = self.alice.request('/desktop/attachments/start', value)
+            self.assertEqual(asset['parts'], 10240)
+            with self.db() as db:
+                row = db.execute('SELECT id FROM relay_blobs WHERE size=?', (maximum,)).fetchone()
+                self.assertIsNotNone(row)
+            self.alice.request('/desktop/attachments/cancel', {'id': asset['id']})
+            self.alice.request('/desktop/attachments/start', {**value, 'size': maximum+1}, expected=400)
+        self.raw_server(self.alice).request('/api/blobs', {'id': 'a'*32, 'device_id': 'missing', 'size': maximum+1}, expected=413)
+        with self.db() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM relay_blobs').fetchone()[0], 0)
+
+    def test_02_resumable_encrypted_delivery_range_and_cleanup(self):
+        raw = b'large-privacy-marker-44929-' + os.urandom(self.chunk*2+71)
+        asset = self.alice.request('/desktop/attachments/start', {'name':'stream.bin', 'size':len(raw), 'kind':'file'})
+        url = '/desktop/attachments/chunk?asset='+asset['id']+'&index='
+        self.alice.binary(url+'0', raw[:self.chunk])
+        self.alice.binary(url+'0', raw[:self.chunk])
+        self.alice.binary(url+'0', b'x'*self.chunk, expected=400)
+        self.alice.binary(url+'1', b'short', expected=400)
+        self.alice.request('/desktop/attachments/finish', {'id':asset['id']}, expected=400)
+        self.stop_process(self.gateway)
+        type(self).gateway = self.start_client(self.client_port, self.env)
+        resumed = self.alice.request('/desktop/attachments/start', {'name':'stream.bin', 'size':len(raw), 'kind':'file'})
+        self.assertEqual(resumed['id'], asset['id'])
+        for index in (2,1): self.alice.binary(url+str(index), raw[index*self.chunk:(index+1)*self.chunk])
+        ready = self.alice.request('/desktop/attachments/finish', {'id':asset['id']})
+        sent = self.alice.request('/api/messages', {'conversation_id':self.cid, 'body':'', 'file_id':ready['id'], 'client_id':'large-offline'}, expected=201)['message']
+        with self.db() as db:
+            packet = json.loads(db.execute('SELECT envelope FROM relay_packets WHERE id=?', (sent['id'],)).fetchone()[0])
+            transfer = packet['blobs'][0]
+            self.assertLess(len(json.dumps(packet)), 10000)
+            for row in db.execute('SELECT ciphertext FROM blob_parts WHERE blob_id=?', (transfer,)):
+                self.assertNotIn(raw[:25], row[0])
+            db.execute('UPDATE relay_blobs SET created_at=0')
+            bob_device = db.execute('SELECT id FROM devices WHERE user_id=?', (self.bob_id,)).fetchone()[0]
+            eve_device = db.execute('SELECT id FROM devices WHERE user_id=?', (self.eve_id,)).fetchone()[0]
+        self.raw_server(self.eve).binary('/api/blobs/'+transfer+'/0?device_id='+eve_device, expected=403)
+        self.raw_server(self.eve).binary('/api/blobs/'+transfer+'/0?device_id='+bob_device, expected=403)
+        self.raw_server(self.bob).binary('/api/blobs/'+transfer+'/0?device_id='+bob_device)
+        self.alice.request('/desktop/attachments/cancel', {'id':asset['id']}, expected=409)
+        received = self.received_file(self.bob, sent['id'])
+        self.assertEqual(self.bob.binary(received['url'])[0], raw)
+        part, headers = self.bob.binary(received['url'], expected=206, Range=f'bytes={self.chunk-9}-{self.chunk+22}')
+        self.assertEqual(part, raw[self.chunk-9:self.chunk+23])
+        self.assertEqual(headers['Content-Range'], f'bytes {self.chunk-9}-{self.chunk+22}/{len(raw)}')
+        self.assertEqual(self.bob.binary(received['url'], expected=206, Range='bytes=-9')[0], raw[-9:])
+        for invalid in ('bytes=-0','bytes=9-2','bytes=999999999999-','bytes=0-1,3-4'):
+            self.bob.binary(received['url'], expected=416, Range=invalid)
+        self.assert_queue_cleared(sent['id'])
+        with self.db() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM blob_parts WHERE blob_id=?',(transfer,)).fetchone()[0],0)
+            self.assertIsNone(db.execute('SELECT 1 FROM relay_blobs WHERE id=?',(transfer,)).fetchone())
+        self.raw_server(self.bob).binary('/api/blobs/'+transfer+'/0?device_id='+bob_device,expected=403)
+        for root in (Path(self.env['WEIYAN_DATA_DIR']), Path(self.env['WEIYAN_CLIENT_DATA'])):
+            for path in root.rglob('*'):
+                if path.is_file() and path.suffix in ('.part', '.sqlite3', '.sqlite3-wal'):
+                    self.assertNotIn(raw[:25], path.read_bytes())
+
+    def test_03_empty_file_and_video_image_preview(self):
+        for index,(kind,name,raw,mime) in enumerate((('file','empty.txt',b'','application/octet-stream'),
+                ('video','movie.mp4',b'\x00\x00\x00\x18ftypisom'+b'v'*1100000,'video/mp4'),
+                ('image','picture.png',b'\x89PNG\r\n\x1a\n'+b'p'*1100000,'image/png'))):
+            upload = self.prepare(raw,kind,name)
+            sent = self.alice.request('/api/messages',{'conversation_id':self.cid,'body':'','file_id':upload['id'],'client_id':'stream-format-'+str(index)},expected=201)['message']
+            received = self.received_file(self.bob,sent['id'])
+            value,headers = self.bob.binary(received['url'])
+            self.assertEqual(value,raw)
+            self.assertEqual(headers.get_content_type(),mime)
+            self.assert_queue_cleared(sent['id'])
+        invalid = self.alice.request('/desktop/attachments/start', {'name':'bad.png','size':3,'kind':'image'})
+        self.alice.binary('/desktop/attachments/chunk?asset='+invalid['id']+'&index=0',b'bad')
+        self.alice.request('/desktop/attachments/finish',{'id':invalid['id']},expected=400)
+        self.alice.request('/desktop/attachments/cancel',{'id':invalid['id']})
+
+    def test_04_recall_removes_pending_ciphertext_and_local_cache(self):
+        upload = self.prepare(b'recalled-large-content-'+os.urandom(self.chunk+33))
+        sent = self.alice.request('/api/messages', {'conversation_id':self.cid,'body':'','file_id':upload['id'],'client_id':'stream-recall'}, expected=201)['message']
+        self.alice.request('/api/recall',{'id':sent['id'],'client_id':sent['client_id']})
+        self.alice.binary(upload['url'],expected=404)
+        history = self.history_until(self.bob, lambda messages: any(m['id']==sent['id'] and m.get('recalled') for m in messages))
+        self.assertTrue(next(m for m in history['messages'] if m['id']==sent['id'])['recalled'])
+        with self.db() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM blob_parts').fetchone()[0],0)
+
+    def test_05_history_sync_includes_large_attachment_without_notifications(self):
+        raw = b'synced-large-'+os.urandom(self.chunk+777)
+        upload = self.prepare(raw)
+        sent = self.alice.request('/api/messages',{'conversation_id':self.cid,'body':'','file_id':upload['id'],'client_id':'large-history'},expected=201)['message']
+        self.received_file(self.bob,sent['id'])
+        port=free_port();env=self.env.copy();env['WEIYAN_CLIENT_DATA']=str(Path(self.temp.name)/'large-new-device')
+        process=self.start_client(port,env);newcomer=Session(f'http://127.0.0.1:{port}')
+        try:
+            newcomer.request('/api/login',{'username':'bob_test','password':'test-password-b'})
+            newcomer.request('/api/bootstrap')
+            sync='sync:'+self.bob_id
+            for session in (self.bob,newcomer):
+                info=session.request('/desktop/security?conversation_id='+sync)
+                session.request('/desktop/security',{'conversation_id':sync,'approve':True,'directory_digest':info['directory_digest']})
+            until=time.time()+60
+            while time.time()<until:
+                newcomer.request('/api/bootstrap');self.bob.request('/api/bootstrap')
+                messages=newcomer.request('/api/search?q=')['messages']
+                if any(m['id']==sent['id'] for m in messages):break
+                time.sleep(.2)
+            received=self.received_file(newcomer,sent['id'])
+            self.assertEqual(newcomer.binary(received['url'])[0],raw)
+            self.assertEqual(newcomer.request('/api/bootstrap')['conversations'][0].get('unread',0),0)
+        finally:self.stop_process(process)
+
+    def test_06_tampered_download_stays_queued_until_validated(self):
+        raw=b'authenticated-download-'+os.urandom(self.chunk+31)
+        upload=self.prepare(raw)
+        # A fresh recipient avoids the previous test's additional device.
+        peer=Session(self.client_base)
+        peer_id=peer.request('/api/register',{'username':'chunk_recipient','password':'chunk-password-123','nickname':'分片接收'})['me']['id']
+        peer.request('/api/bootstrap')
+        cid=self.alice.request('/api/conversations',{'peer_id':peer_id})['conversation']['id']
+        sent=self.alice.request('/api/messages',{'conversation_id':cid,'body':'','file_id':upload['id'],'client_id':'tampered-chunks'},expected=201)['message']
+        with self.db() as db:
+            transfer=json.loads(db.execute('SELECT envelope FROM relay_packets WHERE id=?',(sent['id'],)).fetchone()[0])['blobs'][0]
+            original=bytes(db.execute('SELECT ciphertext FROM blob_parts WHERE blob_id=? AND part=1',(transfer,)).fetchone()[0])
+            db.execute('UPDATE blob_parts SET ciphertext=? WHERE blob_id=? AND part=1',(original[:-1]+bytes([original[-1]^1]),transfer))
+        message=self.history_until(peer,lambda messages:any(m['id']==sent['id'] for m in messages),cid=cid)['messages'][-1]
+        asset=message['attachment']['url'].rsplit('/',1)[-1]
+        time.sleep(.5)
+        self.assertFalse(peer.request('/desktop/attachments/status?ids='+asset)[asset]['ready'])
+        self.stop_process(self.gateway)
+        type(self).gateway=self.start_client(self.client_port,self.env)
+        self.assertFalse(peer.request('/desktop/attachments/status?ids='+asset)[asset]['ready'])
+        with self.db() as db:
+            self.assertIsNotNone(db.execute('SELECT 1 FROM relay_packets WHERE id=?',(sent['id'],)).fetchone())
+            db.execute('UPDATE blob_parts SET ciphertext=? WHERE blob_id=? AND part=1',(original,transfer))
+        until=time.time()+30
+        while time.time()<until:
+            peer.request('/api/bootstrap')
+            if peer.request('/desktop/attachments/status?ids='+asset)[asset]['ready']:break
+            time.sleep(.2)
+        self.assertEqual(peer.binary(message['attachment']['url'])[0],raw)
+        self.assert_queue_cleared(sent['id'])
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

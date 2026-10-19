@@ -6,17 +6,19 @@
 
 ![服务端隐私与存储](服务端/预览/隐私与存储.jpg)
 
+当前正式版本为 **2.1.3**。**2.1.4 开发中，暂未发布**；下列大附件和安卓后台改进随后续版本交付。
+
 ## 下载与使用
 
 在 [Releases 下载页面](https://github.com/XJhejin/weiyan-poetry/releases/latest)选择安装包：
 
 | 用途 | 安装包 | 安装方法 |
 | --- | --- | --- |
-| Windows 客户端 | `weiyan-client-2.1.4-windows-x64.msi` | 双击安装，自动添加桌面和开始菜单快捷方式 |
-| Android 客户端 | `weiyan-client-2.1.4-android.apk` | 手机下载后通过系统安装器安装 |
-| Apple Silicon Mac 服务端 | `weiyan-server-2.1.4-macos-arm64.dmg` | 打开后将应用拖到 Applications |
-| Windows 服务端 | `weiyan-server-2.1.4-windows-x64.zip` | 完整解压，双击服务端 exe |
-| Windows 服务器控制端 | `weiyan-control-2.1.4-windows-x64.msi` | 独立安装，管理已部署的远程 Linux 服务 |
+| Windows 客户端 | `weiyan-client-2.1.3-windows-x64.msi` | 双击安装，自动添加桌面和开始菜单快捷方式 |
+| Android 客户端 | `weiyan-client-2.1.3-android.apk` | 手机下载后通过系统安装器安装 |
+| Apple Silicon Mac 服务端 | `weiyan-server-2.1.3-macos-arm64.dmg` | 打开后将应用拖到 Applications |
+| Windows 服务端 | `weiyan-server-2.1.3-windows-x64.zip` | 完整解压，双击服务端 exe |
+| Windows 服务器控制端 | `weiyan-control-2.1.3-windows-x64.msi` | 独立安装，管理已部署的远程 Linux 服务 |
 
 Windows 客户端也提供便携 ZIP。ZIP 中的 `_internal` 必须与 exe 一起保留。所有安装包包含运行库，不需要安装 Python。
 
@@ -64,7 +66,8 @@ Mac 应用仅作临时签名，尚未经过 Apple Developer ID 公证；首次�
 ## 日常操作
 
 - Windows Enter 发送、Shift + Enter 换行；Android Enter 换行，点击发送按钮发送。支持中文输入法、表情、图片与粘贴图片。
-- 支持文件和视频发送、发送前视频预览、聊天内播放与下载；可将图片、视频或文件拖到输入区域。图片最大 5 MB，文件/视频每项最大 20 MB，一条消息选择一项附件。
+- 支持文件和视频发送、发送前视频预览、聊天内播放与下载；可将图片、视频或文件拖到输入区域。2.1.4 开发版将图片、视频、文件单项上限统一提高至 **10 GB（10 × 1024³ 字节）**，一条消息选择一项附件；较大附件需要客户端与服务端同时升级。现有 2.1.3 安装包仍为图片 5 MB、文件/视频 20 MB。
+- 大附件按 1 MiB 分片独立加密与传输，显示上传/接收进度，失败可重试；收到消息后在后台接收附件，完整校验并加密保存到本机才确认删除服务端密文。离线队列不设到期时间及总容量上限；磁盘需有足够实际可用空间。超过 20 MB 的图片显示可保存的图片文件卡片，避免自动解码超大图片。
 - 公共房间仅「-扉页-」。搜索支持 @用户名精确查找或昵称搜索；结果提供「私聊」「添加好友」。好友需要对方同意，陌生人私聊顶部显示提示与加好友按钮。
 - 群聊支持邀请与接受、群主/管理员、踢出、群名称/头像/公告、群昵称、禁言、群主转让、退群和解散。管理员不能移除群主，只有群主能分配管理员。
 - Windows 关闭窗口后继续在右下角托盘运行；点击图标打开，托盘菜单可彻底退出。后台新消息显示通用加密消息提醒，可关闭提醒。
@@ -82,9 +85,9 @@ Mac 应用仅作临时签名，尚未经过 Apple Developer ID 公证；首次�
 
 页面显示当前版本、GitHub 正式版本、更新说明和下载进度。更新包先通过 **Ed25519 发布签名 + SHA-256** 校验。Windows 便携版由辅助程序替换并在失败时回滚；MSI 交由 Windows Installer 升级与回滚；Android 还核对应用 ID、版本与固定签名证书，再交由系统安装器确认；Mac 挂载已校验 DMG，校验应用签名后替换应用并保留旧应用备份。用户资料位于安装包之外。
 
-Mac 更新检查使用随安装包提供的 CA 证书，保留 HTTPS 证书和主机名验证；GitHub API 不可用时尝试 GitHub Releases 的签名清单。若旧版 Mac 服务端一直提示无法连接 GitHub，请手动下载 2.1.4 DMG，退出服务端后覆盖 Applications 中的应用一次；资料目录保留。如果 GitHub 整站无法访问，仍需先修复网络或代理。
+Mac 更新检查使用随安装包提供的 CA 证书，保留 HTTPS 证书和主机名验证；GitHub API 不可用时尝试 GitHub Releases 的签名清单。若旧版 Mac 服务端一直提示无法连接 GitHub，请手动下载 2.1.3 DMG，退出服务端后覆盖 Applications 中的应用一次；资料目录保留。如果 GitHub 整站无法访问，仍需先修复网络或代理。
 
-Windows 更新前会检查更新助手启动与验签依赖，失败时保留当前程序运行。如果旧版更新时出现 `No module named '_cffi_backend'`，请从 Releases 下载 2.1.4 的 MSI，退出客户端后双击安装一次；原 Windows 账号下的聊天资料与连接设置会保留。不要卸载安卓旧版再安装，新 APK 使用相同证书，可直接覆盖升级。
+Windows 更新前会检查更新助手启动与验签依赖，失败时保留当前程序运行。如果旧版更新时出现 `No module named '_cffi_backend'`，请从 Releases 下载 2.1.3 的 MSI，退出客户端后双击安装一次；原 Windows 账号下的聊天资料与连接设置会保留。不要卸载安卓旧版再安装，新 APK 使用相同证书，可直接覆盖升级。
 
 ## 数据位置与备份
 

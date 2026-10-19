@@ -4,6 +4,7 @@ import http.cookiejar
 import json
 from pathlib import Path
 import secrets
+import time
 import urllib.request
 from secure import SecureClient, protect, canonical
 
@@ -80,4 +81,25 @@ for device in (b, new):
     device.receive()
     recalled = device.vault.message(a.me['id'], sent['client_id'])
     assert recalled['recalled'] and 'attachment' not in recalled
+large = b'android-chunk-privacy-' + secrets.token_bytes(1024*1024+79)
+asset = a.vault.files.begin({'name':'phone-large.bin','size':len(large),'kind':'file'})['id']
+a.vault.files.reserve(a,asset)
+for index in range(2):
+    a.vault.files.put(asset,index,large[index*1024*1024:(index+1)*1024*1024])
+    a.vault.files.send_part(a,asset,index)
+a.vault.files.finish(asset)
+a.vault.files.uploaded(a,asset)
+large_sent=a.send({'conversation_id':cid,'body':'','file_id':asset,'client_id':'large-'+secrets.token_hex(8)})
+for device in (b,new):
+    until=time.monotonic()+30
+    while time.monotonic()<until:
+        device.receive()
+        message=device.vault.message(a.me['id'],large_sent['client_id'])
+        if message:
+            local=device.vault.get('file',message['attachment']['url'].rsplit('/',1)[-1])
+            if local and device.vault.files.ready(local): break
+        time.sleep(.1)
+    else: raise AssertionError('Android encrypted chunks did not complete')
+    assert b''.join(device.vault.files.read_range(local,0,len(large)-1))==large
+    for path in device.vault.files.root.rglob('*.part'): assert large[:21] not in path.read_bytes()
 smoke_result = 'PASS'

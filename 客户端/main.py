@@ -19,6 +19,7 @@ import base64
 import re
 import time
 from secure import SecureClient, SecurityError, RemoteError, protect, validate_file
+from large_files import CHUNK_SIZE, MAX_SIZE
 from update import Updater
 from release_config import VERSION
 
@@ -136,6 +137,7 @@ class Gateway(BaseHTTPRequestHandler):
                     old = self.server.contexts.pop(key, None)
                     if old:
                         old.on_received = None
+                        old.transfers.stop()
                     if getattr(self.server, 'background', None):
                         self.server.background.clear()
                     (PROFILE / 'sessions' / (key + '.dpapi')).unlink(missing_ok=True)
@@ -202,6 +204,10 @@ class Gateway(BaseHTTPRequestHandler):
                     return self.json_response({"error": "地址太长了。"}, 400)
                 data = json.loads(self.rfile.read(length))
                 value = save_server(data.get("server_url"))
+                with self.server.context_lock:
+                    for context in self.server.contexts.values():
+                        context.transfers.stop()
+                    self.server.contexts.clear()
                 if getattr(self.server, 'background', None):
                     self.server.background.clear()
                 return self.json_response({"server_url": value}, clear_cookie=True)
@@ -210,7 +216,7 @@ class Gateway(BaseHTTPRequestHandler):
                 if origin and origin != f"http://127.0.0.1:{self.server.server_port}":
                     return self.json_response({"error": "请求来源不正确。"}, 403)
                 return self.websocket_proxy()
-            if path == "/api/bootstrap" or path.startswith(("/desktop/security", "/desktop/storage", "/local-images/", "/local-files/")) or path in ("/api/messages", "/api/recall", "/api/upload", "/api/attachments", "/api/search", "/api/read") or re.fullmatch(r"/api/conversations/[^/]+/messages", path):
+            if path == "/api/bootstrap" or path.startswith(("/desktop/security", "/desktop/storage", "/desktop/attachments/", "/local-images/", "/local-files/")) or path in ("/api/messages", "/api/recall", "/api/upload", "/api/attachments", "/api/search", "/api/read") or re.fullmatch(r"/api/conversations/[^/]+/messages", path):
                 return self.secure_api(path)
             if path.startswith(("/api/", "/uploads/")):
                 return self.proxy()
@@ -239,12 +245,17 @@ class Gateway(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
             pass
 
-    def context(self):
+    def context(self, cached=False):
         cookie = self.relay_cookie()
         server_url = CONFIG["server_url"]
         key = hashlib.sha256((server_url + cookie).encode()).hexdigest()
         if key in getattr(self.server, 'signed_out', set()):
             raise RemoteError('请先登录。', 401)
+        if cached:
+            with self.server.context_lock:
+                context = self.server.contexts.get(key)
+                if context is not None:
+                    return context, None
         cache = PROFILE / 'sessions' / (key + '.dpapi')
         try:
             status, _, raw = self.upstream("/api/bootstrap")
@@ -288,9 +299,51 @@ class Gateway(BaseHTTPRequestHandler):
         return result
 
     def secure_api(self, path):
-        context, bootstrap = self.context()
+        context, bootstrap = self.context(cached=path.startswith(('/desktop/attachments/', '/local-files/')))
         params = parse_qs(urlsplit(self.path).query)
+        if path == '/desktop/attachments/chunk' and self.command == 'POST':
+            length = int(self.headers.get('Content-Length', '-1'))
+            if self.headers.get_content_type() != 'application/octet-stream' or not 0 <= length <= CHUNK_SIZE:
+                self.close_connection = True
+                raise ValueError('附件分片格式或大小无效。')
+            asset, index = params.get('asset', [''])[0], int(params.get('index', ['-1'])[0])
+            context.vault.files.put(asset, index, self.rfile.read(length))
+            context.vault.files.send_part(context, asset, index)
+            return self.json_response({'ok': True})
         payload = self.read_json() if self.command == "POST" else {}
+        if path == '/desktop/attachments/start' and self.command == 'POST':
+            capability = context.remote('/api/health').get('attachments', {})
+            if capability.get('protocol') != 1 or capability.get('max_size', 0) < MAX_SIZE or capability.get('chunk_size') != CHUNK_SIZE:
+                raise RemoteError('当前服务端不支持大附件，请先升级服务端。', 409)
+            asset = payload.get('resume') or context.vault.files.resumable(payload)
+            if asset:
+                file = context.vault.get('file', asset)
+                if not file or any(file.get(k) != payload.get(k) for k in ('name', 'size', 'kind')):
+                    raise ValueError('请选择同一个文件继续上传。')
+                result = {'id': asset, 'chunk_size': CHUNK_SIZE, 'parts': context.vault.files.count(file)}
+            else:
+                result = context.vault.files.begin(payload)
+                asset = result['id']
+            context.vault.files.reserve(context, asset)
+            return self.json_response(result)
+        if path == '/desktop/attachments/finish' and self.command == 'POST':
+            result = context.vault.files.finish(payload.get('id'))
+            context.vault.files.uploaded(context, payload.get('id'))
+            return self.json_response(result)
+        if path == '/desktop/attachments/cancel' and self.command == 'POST':
+            asset = payload.get('id')
+            file = context.vault.get('file', asset)
+            if file and file.get('blob'):
+                if context.vault.get('blob_uploaded', file['blob'].get('transfer')) == 'used':
+                    raise RemoteError('已经发送的附件不能取消上传，请使用撤回消息。', 409)
+                context.remote('/api/blobs/cancel', {'id': file['blob'].get('transfer')})
+                context.vault.files.discard(asset)
+            return self.json_response({'ok': True})
+        if path == '/desktop/attachments/status' and self.command == 'GET':
+            assets = params.get('ids', [''])[0].split(',')
+            if len(assets) > 100 or any(not re.fullmatch(r'[0-9a-f]{32,64}', asset) for asset in assets):
+                raise ValueError('附件查询无效。')
+            return self.json_response({asset: context.vault.files.status(asset) for asset in assets})
         if path == "/api/bootstrap":
             return self.json_response(context.bootstrap(bootstrap))
         if path == "/desktop/security":
@@ -318,43 +371,51 @@ class Gateway(BaseHTTPRequestHandler):
             file = context.vault.get('file', path.rsplit('/', 1)[-1])
             if not file:
                 return self.json_response({'error': '文件不存在。'}, 404)
-            raw = base64.b64decode(file['data'], validate=True)
-            start, end = 0, len(raw) - 1
+            streamed = bool(file.get('blob'))
+            if streamed and not context.vault.files.ready(file):
+                return self.json_response({'error': '附件正在加密接收，请稍后再试。'}, 409)
+            raw = None if streamed else base64.b64decode(file['data'], validate=True)
+            size = file['size'] if streamed else len(raw)
+            start, end = 0, size - 1
             requested = self.headers.get('Range')
             status = 200
             if requested:
                 match = re.fullmatch(r'bytes=(\d*)-(\d*)', requested)
-                if not match or not any(match.groups()):
-                    return self.json_response({'error': '文件范围无效。'}, 416)
-                if not match[1]:
-                    start = max(0, len(raw) - int(match[2]))
-                else:
-                    start = int(match[1])
-                    end = min(end, int(match[2])) if match[2] else end
-                if start > end or start >= len(raw):
+                if match and any(match.groups()):
+                    if not match[1]:
+                        start = max(0, size - int(match[2]))
+                    else:
+                        start = int(match[1])
+                        end = min(end, int(match[2])) if match[2] else end
+                if not match or not any(match.groups()) or start > end or start >= size:
                     self.send_response(416)
-                    self.send_header('Content-Range', f'bytes */{len(raw)}')
+                    self.send_header('Content-Range', f'bytes */{size}')
                     self.send_header('Content-Length', '0')
                     self.end_headers()
                     return
                 status = 206
-            inline = file['kind'] == 'video' and not params.get('download')
+            inline = file['kind'] in ('video', 'image') and not params.get('download')
             self.send_response(status)
             self.send_header('Content-Type', file['mime'] if inline else 'application/octet-stream')
             self.send_header('Content-Disposition', ('inline' if inline else 'attachment') + "; filename*=UTF-8''" + quote(file['name']))
             self.send_header('Content-Length', str(max(0, end - start + 1)))
             self.send_header('Accept-Ranges', 'bytes')
             if status == 206:
-                self.send_header('Content-Range', f'bytes {start}-{end}/{len(raw)}')
+                self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.end_headers()
-            self.wfile.write(raw[start:end + 1])
+            if streamed:
+                if size:
+                    for chunk in context.vault.files.read_range(file, start, end):
+                        self.wfile.write(chunk)
+            else:
+                self.wfile.write(raw[start:end + 1])
             return
         if path == "/api/upload":
             raw = base64.b64decode(payload.get("data", ""), validate=True)
             if len(raw) > 5 * 1024 * 1024:
-                raise ValueError("请选择 5 MB 以内的图片。")
+                raise ValueError("较大图片请使用分片上传，最大支持 10 GB。")
             if raw.startswith(b"\x89PNG\r\n\x1a\n"):
                 mime = "image/png"
             elif raw.startswith(b"\xff\xd8\xff"):

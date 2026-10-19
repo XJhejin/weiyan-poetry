@@ -156,7 +156,7 @@ function renderList() {
   list.innerHTML=convs.map(c=>{
     const m=c.last_message;
     const prefix=m && m.sender.id!==state.me.id && c.kind!=='direct' ? m.sender.nickname+'：' : '';
-    return `<button class="conversation-item${c.id===state.active?' active':''}" data-conv="${escape(c.id)}">${avatar(c,false,c.kind==='direct'&&state.online.includes(c.peer.id))}<div class="conversation-copy"><div class="conversation-line"><span class="conversation-name">${escape(c.name)}${pins.includes(c.id)?'<svg class="conversation-pin"><use href="#i-pin"/></svg>':''}</span><span class="conversation-time">${m?shortTime(m.created_at):''}</span></div><div class="conversation-line"><span class="conversation-preview">${muted.includes(c.id)?'🔕 ':''}${escape(prefix+(m?(m.body||(m.attachment?(m.attachment.kind==='video'?'[视频]':'[文件]')+' '+m.attachment.name:'[图片]')):'还没有小笺，打个招呼吧'))}</span>${c.unread?`<span class="unread-badge">${c.unread>99?'99+':c.unread}</span>`:''}</div></div></button>`;
+    return `<button class="conversation-item${c.id===state.active?' active':''}" data-conv="${escape(c.id)}">${avatar(c,false,c.kind==='direct'&&state.online.includes(c.peer.id))}<div class="conversation-copy"><div class="conversation-line"><span class="conversation-name">${escape(c.name)}${pins.includes(c.id)?'<svg class="conversation-pin"><use href="#i-pin"/></svg>':''}</span><span class="conversation-time">${m?shortTime(m.created_at):''}</span></div><div class="conversation-line"><span class="conversation-preview">${muted.includes(c.id)?'🔕 ':''}${escape(prefix+(m?(m.body||(m.attachment?(m.attachment.kind==='video'?'[视频]':m.attachment.kind==='image'?'[图片]':'[文件]')+' '+m.attachment.name:'[图片]')):'还没有小笺，打个招呼吧'))}</span>${c.unread?`<span class="unread-badge">${c.unread>99?'99+':c.unread}</span>`:''}</div></div></button>`;
   }).join('')+(convs.length?'':emptyHTML('☁️','这里暂时安安静静的',state.filter==='unread'?'所有小笺都已经读过啦。':'换个名字搜索试试吧。'));
 }
 function emptyHTML(icon,title,description) { return `<div class="empty-state"><span class="empty-icon">${icon}</span>${escape(title)}<br><small>${escape(description)}</small></div>`; }
@@ -243,6 +243,7 @@ function notify(m,conv) {
 function updateInput() { $('#character-count').textContent=`${$('#message-input').value.length} / 2000`; saveDraft(); }
 async function sendMessage() {
   if(state.sending || !state.active) return;
+  if(state.filePreparing){toast('附件正在加密上传，请准备完成后发送。');return;}
   let body=$('#message-input').value.trim();
   if(!body && !state.attachment && !state.fileAttachment) {$('#message-input').focus(); return;}
   if(state.reply) body=`「回复 ${state.reply.sender.nickname}：${(state.reply.body || '[图片]').slice(0,80)}」\n${body}`;
@@ -359,7 +360,7 @@ function messageAction(action,id,event) {
   if(m.recalled)return;
   if(action==='recall'){post('/api/recall',{id:m.id,client_id:m.client_id}).then(r=>{receiveMessage(r.message);toast('消息已撤回。');}).catch(e=>toast(e.message));return;}
   if(action==='copy') { if(!m.body){toast('这是一封图片小笺。');return;} copyText(m.body); }
-  if(action==='reply') {state.reply=m;$('#reply-preview').innerHTML=`<b>回复 ${escape(m.sender.nickname)}</b>${escape((m.body||(m.attachment?(m.attachment.kind==='video'?'[视频]':'[文件]')+' '+m.attachment.name:'[图片]')).slice(0,100))}<button class="icon-button" id="cancel-reply" aria-label="取消回复">${icons('close')}</button>`;$('#reply-preview').hidden=false;$('#cancel-reply').onclick=()=>{state.reply=null;$('#reply-preview').hidden=true;};$('#message-input').focus();}
+  if(action==='reply') {state.reply=m;$('#reply-preview').innerHTML=`<b>回复 ${escape(m.sender.nickname)}</b>${escape((m.body||(m.attachment?(m.attachment.kind==='video'?'[视频]':m.attachment.kind==='image'?'[图片]':'[文件]')+' '+m.attachment.name:'[图片]')).slice(0,100))}<button class="icon-button" id="cancel-reply" aria-label="取消回复">${icons('close')}</button>`;$('#reply-preview').hidden=false;$('#cancel-reply').onclick=()=>{state.reply=null;$('#reply-preview').hidden=true;};$('#message-input').focus();}
   if(action==='save'){let saved=stored('saved',[]);if(saved.some(s=>s.id===m.id)){saved=saved.filter(s=>s.id!==m.id);toast('已从收藏中取下。');}else{saved.unshift(m);toast('这句温柔已经收好啦。');}store('saved',saved);if(state.view==='saved')renderList();}
   if(action==='more'){const actions=[{icon:'chat',label:'回复这封小笺',action:()=>messageAction('reply',id)},{icon:'copy',label:'复制文字',action:()=>messageAction('copy',id)},{icon:'bookmark',label:'收藏 / 取消收藏',action:()=>messageAction('save',id)}];if(m.sender.id===state.me.id&&Date.now()-new Date(m.created_at).getTime()<120000)actions.push({icon:'close',label:'撤回消息',action:()=>messageAction('recall',id)});showContext(actions,event.clientX,event.clientY);}
 }

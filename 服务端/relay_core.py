@@ -41,6 +41,7 @@ def initialize(db, data):
     CREATE TABLE IF NOT EXISTS receipt_targets(packet_id INTEGER NOT NULL,device_id TEXT NOT NULL,PRIMARY KEY(packet_id,device_id));
     """)
     db.execute("INSERT OR IGNORE INTO settings VALUES ('server_id',?)", (secrets.token_hex(16),))
+    blob_relay.initialize(db)
     db.execute("INSERT OR IGNORE INTO settings VALUES ('registration','1')")
     # Pending ciphertext has no expiry or configured storage quota. Preserve
     # existing packets when upgrading from the earlier expiring queue schema.
@@ -77,6 +78,7 @@ def privacy(db):
 def cleanup(db):
     db.execute("PRAGMA secure_delete=ON")
     db.execute("DELETE FROM relay_packets WHERE NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.packet_id=relay_packets.id)")
+    blob_relay.cleanup(db)
     db.execute("DELETE FROM receipts WHERE created_at<? AND id NOT IN(SELECT id FROM relay_packets)", (time.time() - 30 * 86400,))
     db.execute('DELETE FROM receipt_targets WHERE packet_id NOT IN (SELECT id FROM receipts WHERE created_at>=?)', (time.time() - 180,))
 
@@ -166,7 +168,7 @@ def relay(db, uid, payload, access, error, events):
     db.execute('BEGIN IMMEDIATE')
     packet = payload.get("envelope")
     required = {"v", "conversation_id", "sender_id", "device_id", "client_id", "ciphertext", "keys", "signature"}
-    if not isinstance(packet, dict) or not required <= set(packet) or set(packet) - required not in (set(), {'recall_of'}, {'sync_to'}):
+    if not isinstance(packet, dict) or not required <= set(packet) or not set(packet)-required <= {'recall_of', 'sync_to', 'blobs'} or ('recall_of' in packet and ('sync_to' in packet or 'blobs' in packet)):
         raise error("仅接受端到端加密消息。")
     cid = packet["conversation_id"]
     if not isinstance(cid, str) or len(cid) > 128:
@@ -225,6 +227,8 @@ def relay(db, uid, payload, access, error, events):
     if recipients:
         db.execute("INSERT INTO relay_packets VALUES (?,?)", (mid, raw))
         db.executemany("INSERT INTO deliveries VALUES (?,?)", [(mid, d["device_id"]) for d in recipients])
+    blob_relay.attach(db, uid, packet, mid, recipients, error)
+    blob_relay.cleanup(db)
     db.commit()
     events.publish({"type": "relay", "id": mid}, {d["user_id"] for d in recipients})
     return {"id": mid, "queued": bool(recipients)}
@@ -254,3 +258,115 @@ def received(db, uid, payload, error):
     db.execute("DELETE FROM deliveries WHERE device_id=? AND packet_id=?", (did, mid))
     cleanup(db)
     return {"ok": True}
+
+
+class AttachmentRelay:
+    """Opaque, bounded attachment parts tied to pending envelope deliveries."""
+    MAX_SIZE = 10 * 1024 ** 3
+    CHUNK_SIZE = 1024 ** 2
+    OVERHEAD = 88
+
+    @staticmethod
+    def initialize(db):
+        db.executescript('''
+            CREATE TABLE IF NOT EXISTS relay_blobs(id TEXT PRIMARY KEY,owner TEXT NOT NULL,device_id TEXT NOT NULL,size INTEGER NOT NULL,parts INTEGER NOT NULL,bound INTEGER NOT NULL DEFAULT 0,created_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS blob_parts(blob_id TEXT NOT NULL REFERENCES relay_blobs(id) ON DELETE CASCADE,part INTEGER NOT NULL,ciphertext BLOB NOT NULL,PRIMARY KEY(blob_id,part));
+            CREATE TABLE IF NOT EXISTS blob_refs(packet_id INTEGER NOT NULL REFERENCES relay_packets(id) ON DELETE CASCADE,blob_id TEXT NOT NULL REFERENCES relay_blobs(id) ON DELETE CASCADE,PRIMARY KEY(packet_id,blob_id));
+            CREATE INDEX IF NOT EXISTS blob_refs_blob ON blob_refs(blob_id);
+        ''')
+
+
+    @staticmethod
+    def valid_id(value):
+        return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{32}', value)
+
+
+    @staticmethod
+    def owned(db, uid, bid, error):
+        row = db.execute('SELECT * FROM relay_blobs WHERE id=? AND owner=?', (bid, uid)).fetchone()
+        if not row:
+            raise error('附件上传不存在。', 404)
+        if not db.execute('SELECT 1 FROM devices WHERE id=? AND user_id=? AND revoked=0', (row['device_id'], uid)).fetchone():
+            raise error('附件上传设备已撤销。', 403)
+        return row
+
+
+    @staticmethod
+    def create(db, uid, payload, error):
+        bid, did, size = payload.get('id'), payload.get('device_id'), payload.get('size')
+        if not AttachmentRelay.valid_id(bid) or type(size) is not int or not 0 <= size <= AttachmentRelay.MAX_SIZE:
+            raise error('请选择 10 GB 以内的附件。', 413)
+        if not isinstance(did, str) or not db.execute('SELECT 1 FROM devices WHERE id=? AND user_id=? AND revoked=0', (did, uid)).fetchone():
+            raise error('请先注册有效的加密设备。', 403)
+        row = db.execute('SELECT * FROM relay_blobs WHERE id=?', (bid,)).fetchone()
+        if row and (row['owner'] != uid or row['device_id'] != did or row['size'] != size):
+            raise error('附件上传身份或长度不匹配。', 409)
+        if not row:
+            db.execute('INSERT INTO relay_blobs VALUES (?,?,?,?,?,0,?)', (bid, uid, did, size, max(1, (size+AttachmentRelay.CHUNK_SIZE-1)//AttachmentRelay.CHUNK_SIZE), time.time()))
+        return {'id': bid, 'parts': [r[0] for r in db.execute('SELECT part FROM blob_parts WHERE blob_id=? ORDER BY part', (bid,))]}
+
+
+    @staticmethod
+    def put(db, uid, bid, index, raw, error):
+        row = AttachmentRelay.owned(db, uid, bid, error)
+        expected = min(AttachmentRelay.CHUNK_SIZE, row['size'] - index * AttachmentRelay.CHUNK_SIZE) + AttachmentRelay.OVERHEAD
+        if not 0 <= index < row['parts'] or len(raw) != expected:
+            raise error('加密附件分片长度无效。', 413)
+        previous = db.execute('SELECT ciphertext FROM blob_parts WHERE blob_id=? AND part=?', (bid, index)).fetchone()
+        if previous:
+            if bytes(previous[0]) != raw:
+                raise error('附件分片与已上传内容不一致。', 409)
+        elif row['bound']:
+            raise error('已发送附件不能修改。', 409)
+        else:
+            db.execute('INSERT INTO blob_parts VALUES (?,?,?)', (bid, index, raw))
+        return {'ok': True}
+
+
+    @staticmethod
+    def get(db, uid, bid, index, did, error):
+        if not db.execute('SELECT 1 FROM devices WHERE id=? AND user_id=? AND revoked=0', (did, uid)).fetchone():
+            raise error('设备无权读取此附件。', 403)
+        if not db.execute('SELECT 1 FROM blob_refs b JOIN deliveries d ON d.packet_id=b.packet_id WHERE b.blob_id=? AND d.device_id=?', (bid, did)).fetchone():
+            raise error('设备无权读取此附件。', 403)
+        row = db.execute('SELECT ciphertext FROM blob_parts WHERE blob_id=? AND part=?', (bid, index)).fetchone()
+        if not row:
+            raise error('附件分片不存在。', 404)
+        return bytes(row[0])
+
+
+    @staticmethod
+    def attach(db, uid, packet, mid, recipients, error):
+        ids = packet.get('blobs', [])
+        if not isinstance(ids, list) or len(ids) > 8 or any(not AttachmentRelay.valid_id(bid) for bid in ids) or len(set(ids)) != len(ids):
+            raise error('附件引用无效。')
+        for bid in ids:
+            row = AttachmentRelay.owned(db, uid, bid, error)
+            count = db.execute('SELECT COUNT(*) FROM blob_parts WHERE blob_id=?', (bid,)).fetchone()[0]
+            if row['device_id'] != packet['device_id'] or row['bound'] or count != row['parts']:
+                raise error('附件尚未完整上传，或已被其他消息使用。', 409)
+            db.execute('UPDATE relay_blobs SET bound=1 WHERE id=?', (bid,))
+            if recipients:
+                db.execute('INSERT INTO blob_refs VALUES (?,?)', (mid, bid))
+
+
+    @staticmethod
+    def cleanup(db):
+        db.execute('DELETE FROM relay_blobs WHERE bound=1 AND NOT EXISTS(SELECT 1 FROM blob_refs r WHERE r.blob_id=relay_blobs.id)')
+
+
+    @staticmethod
+    def cancel(db, uid, bid, error):
+        if not AttachmentRelay.valid_id(bid):
+            raise error('附件传输编号无效。')
+        row = db.execute('SELECT owner,bound FROM relay_blobs WHERE id=?', (bid,)).fetchone()
+        if row:
+            if row['owner'] != uid:
+                raise error('无权取消此附件。', 403)
+            if row['bound']:
+                raise error('已经发送的附件不能取消上传，请使用撤回消息。', 409)
+            db.execute('DELETE FROM relay_blobs WHERE id=?', (bid,))
+        return {'ok': True}
+
+
+blob_relay = AttachmentRelay

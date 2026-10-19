@@ -110,6 +110,11 @@ public class SmokeInstrumentation extends Instrumentation {
             js(web,"closeModal();document.querySelector('#message-input').value='安卓加密消息';sendMessage();");
             waitJs(web,"[...state.messages.values()].some(m=>m.body==='安卓加密消息'&&m.encrypted)");
             if(!"true".equals(js(web,"document.querySelector('#file-button')!==null && document.querySelector('#video-button')!==null && document.querySelector('#encryption-info')!==null")))throw new AssertionError("Phone controls missing");
+            js(web,"window.largeUiFile=new File([new Uint8Array([0,0,0,24,102,116,121,112,105,115,111,109]),new Uint8Array(21*1024*1024)],'phone-large.mp4',{type:'video/mp4'});chooseAttachment(window.largeUiFile).then(()=>window.largeUiReady=true).catch(e=>window.uiError=e.message);");
+            waitJs(web,"window.largeUiReady===true && state.fileAttachment?.size>20*1024*1024 && document.querySelector('.attachment-video-preview')!==null && !state.filePreparing");
+            if(!"true".equals(js(web,"MAX_ATTACHMENT_SIZE===10*1024**3 && fileSize(MAX_ATTACHMENT_SIZE)==='10.00 GB'")))throw new AssertionError("Phone attachment limit is not 10 GiB");
+            js(web,"sendMessage();");
+            waitJs(web,"[...state.messages.values()].some(m=>m.attachment?.name==='phone-large.mp4'&&m.encrypted) && document.querySelector('.message-video')!==null");
             js(web,"window.weiyanSetMessageNotices(true);window.popupOldActive=state.active;window.popupOldMessages=state.messages;state.active='test-other-conversation';state.messages=new Map();window.popupCid='room:lobby';window.popupTestMessage={id:9000001,client_id:'popup-only-test',conversation_id:window.popupCid,sender:{id:'popup-peer',nickname:'提醒验证',avatar:'flower'},body:'popup-private-body-3348',created_at:new Date().toISOString()};receiveMessage(window.popupTestMessage);");
             waitJs(web,"document.querySelector('#message-popup').hidden===false");
             if(!"true".equals(js(web,"!document.querySelector('#message-popup').textContent.includes('popup-private-body')")))throw new AssertionError("Foreground banner revealed plaintext");
@@ -189,8 +194,11 @@ public class SmokeInstrumentation extends Instrumentation {
                 Python.getInstance().getModule("builtins").callAttr("exec","_gateway.background.activate(b, bob.call('/api/bootstrap'))",globals);
                 shell("input keyevent 223");shell("dumpsys battery unplug");
                 try {
-                    shell("dumpsys deviceidle force-idle");
-                    if(!shell("dumpsys deviceidle get deep").contains("IDLE"))throw new AssertionError("Device did not enter Doze");
+                    shell("dumpsys deviceidle enable");
+                    String forced=shell("dumpsys deviceidle force-idle deep");
+                    String idleState="";
+                    for(int i=0;i<40;i++){idleState=shell("dumpsys deviceidle get deep");if(idleState.contains("IDLE"))break;Thread.sleep(100);}
+                    if(!idleState.contains("IDLE"))throw new AssertionError("Device did not enter Doze: "+forced+" / "+idleState);
                     NotificationService.clearUnread();
                     Python.getInstance().getModule("builtins").callAttr("exec",
                         "closed_id='closed-'+secrets.token_hex(8)\na.send({'conversation_id':cid,'body':'closed-private-body-4492','client_id':closed_id})",globals);

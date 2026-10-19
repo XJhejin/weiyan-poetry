@@ -7,6 +7,7 @@ async function api(path,data){const r=await fetch(path,{method:data?'POST':'GET'
 const titles={logs:['运行日志','检查远程聊天服务的运行情况。'],overview:['运行概览','掌握服务状态，让每一次交流顺畅抵达。'],accounts:['账号与设备','管理成员身份与设备，让连接井然有序。'],privacy:['隐私与存储','明确保存规则，让数据各有所归。'],updates:['软件更新','查看正式版本，获取新的功能与修复。']};
 function tab(id){$$('.page').forEach(p=>p.hidden=p.id!==id);$$('[data-tab]').forEach(b=>b.classList.toggle('selected',b.dataset.tab===id));$('#page-title').textContent=titles[id][0];$('#page-description').textContent=titles[id][1];}
 $$('[data-tab]').forEach(b=>b.onclick=()=>tab(b.dataset.tab));$$('[data-go]').forEach(b=>b.onclick=()=>tab(b.dataset.go));
+function queueSize(bytes){return bytes>=1073741824?(bytes/1073741824).toFixed(2)+' GB':bytes>=1048576?(bytes/1048576).toFixed(1)+' MB':(bytes/1024).toFixed(1)+' KB';}
 function date(v){return new Date(typeof v==='number'?v*1000:v).toLocaleString('zh-CN',{hour12:false});}
 function accountAvatar(user){const icons={bunny:'🐰',cat:'🐱',bear:'🐻',flower:'🌼',moon:'🌙',sparkles:'✨'};return `<span class="account-avatar">${/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(user.avatar||'')?`<img src="${esc(user.avatar)}" alt="${esc(user.nickname)}的头像">`:icons[user.avatar]||'🌼'}</span>`;}
 function confirmAction(title,text){$('#confirm-title').textContent=title;$('#confirm-text').textContent=text;WeiyanMotion.openDialog($('#confirm'));return new Promise(resolve=>{$('#confirm-cancel').onclick=()=>{WeiyanMotion.closeDialog($('#confirm'));resolve(false);};$('#confirm-ok').onclick=()=>{WeiyanMotion.closeDialog($('#confirm'));resolve(true);};$('#confirm').oncancel=()=>resolve(false);});}
@@ -26,7 +27,7 @@ function renderListenConfig(){
 function addressLabel(value){return '公网 HTTPS';} function unusedAddressLabel(value){const host=new URL(value).hostname.replace(/^\[|\]$/g,'');return host==='::1'||host.startsWith('127.')?'本机':['0.0.0.0','::'].includes(state.host)?'局域网':'指定地址';}
 function render(){
   $('#service-state').textContent=state.running?'服务正在运行':'服务已停止';$('#status-dot').classList.toggle('off',!state.running);
-  $('#stat-online').textContent=state.online;$('#stat-connections').textContent=state.sessions.length+' 个连接';$('#stat-accounts').textContent=state.accounts.length;$('#stat-queue').textContent=state.queued;$('#stat-size').textContent=(state.queue_bytes/1024).toFixed(1)+' KB 暂存空间';
+  $('#stat-online').textContent=state.online;$('#stat-connections').textContent=state.sessions.length+' 个连接';$('#stat-accounts').textContent=state.accounts.length;$('#stat-queue').textContent=state.queued;$('#stat-size').textContent=queueSize(state.queue_bytes)+' 暂存空间';
   const t=state.uptime;$('#stat-uptime').textContent=[Math.floor(t/3600),Math.floor(t/60)%60,t%60].map(v=>String(v).padStart(2,'0')).join(':');
   renderListenConfig();
   $('#service-control').textContent=state.running?'停止服务':'启动服务';$('#control-note').textContent='后端通过本机回环地址连接 HTTPS 代理。';$('#service-error').textContent=state.error;

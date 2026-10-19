@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import copy
 from ctypes import wintypes
 import hashlib
 import http.client
@@ -25,10 +26,11 @@ from nacl.public import PrivateKey, PublicKey, SealedBox
 from nacl.secret import SecretBox
 from nacl.signing import SigningKey, VerifyKey
 from nacl.exceptions import CryptoError, BadSignatureError
+from large_files import MAX_SIZE, CHUNK_SIZE, OVERHEAD, EncryptedFiles, FileTransfers, checked_descriptor
 
 DOMAIN = b"WeiyanPoetry/envelope/v2\0"
 DEVICE_DOMAIN = b"WeiyanPoetry/device/v2\0"
-MAX_FILE = 20 * 1024 * 1024
+MAX_FILE = MAX_SIZE
 
 
 def canonical(value):
@@ -48,7 +50,7 @@ def validate_image(image):
         raise SecurityError('图片格式不正确。')
     raw = unb64(image['data'])
     if len(raw) > 5 * 1024 * 1024:
-        raise SecurityError('请选择 5 MB 以内的图片。')
+        raise SecurityError('较大图片请使用分片上传，最大支持 10 GB。')
     if raw.startswith(b'\x89PNG\r\n\x1a\n'):
         mime = 'image/png'
     elif raw.startswith(b'\xff\xd8\xff'):
@@ -67,8 +69,8 @@ def validate_file(file):
         raise SecurityError('文件格式不正确。')
     raw = unb64(file['data'])
     name = file.get('name')
-    if len(raw) > MAX_FILE or not isinstance(name, str) or not 1 <= len(name) <= 180 or any(ord(c) < 32 or c in '/\\' for c in name):
-        raise SecurityError('文件名无效，或文件超过 20 MB。')
+    if len(raw) > 20 * 1024 * 1024 or not isinstance(name, str) or not 1 <= len(name) <= 180 or any(ord(c) < 32 or c in '/\\' for c in name):
+        raise SecurityError('文件名无效，或需要使用分片上传（最大 10 GB）。')
     kind, mime = 'file', 'application/octet-stream'
     if file.get('kind') == 'video':
         if len(raw) >= 12 and raw[4:8] == b'ftyp':
@@ -174,6 +176,7 @@ class Vault:
             CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY,cid TEXT NOT NULL,sender TEXT NOT NULL,client_id TEXT NOT NULL,value BLOB NOT NULL,UNIQUE(sender,client_id));
             CREATE INDEX IF NOT EXISTS history_cid ON history(cid,id);
             """)
+        self.files = EncryptedFiles(self)
 
     def db(self):
         return sqlite3.connect(self.db_path, timeout=20, factory=ClosingConnection)
@@ -214,6 +217,7 @@ class Vault:
 
     def recall(self, target, sender, cid, created_at):
         """A durable tombstone prevents delayed delivery or history sync resurrection."""
+        discarded = []
         with self.lock, self.db() as db:
             row = db.execute('SELECT id,value FROM history WHERE sender=? AND client_id=?', (sender['id'], target['client_id'])).fetchone()
             previous = self.unpack('message', row[0], row[1]) if row else None
@@ -229,13 +233,19 @@ class Vault:
             if previous:
                 for kind, url in [('image', previous.get('image')), ('file', previous.get('attachment', {}).get('url'))]:
                     if url:
+                        if kind == 'file':
+                            row = db.execute('SELECT value FROM records WHERE kind=? AND key=?', (kind, url.rsplit('/', 1)[-1])).fetchone()
+                            if row:
+                                discarded.append((url.rsplit('/', 1)[-1], self.unpack(kind, url.rsplit('/', 1)[-1], row[0])))
                         db.execute('DELETE FROM records WHERE kind=? AND key=?', (kind, url.rsplit('/', 1)[-1]))
             saved = db.execute("SELECT value FROM records WHERE kind='ui' AND key='saved'").fetchone()
             if saved:
                 values = self.unpack('ui', 'saved', saved[0])
                 values = [m for m in values if m.get('id') != target['id']]
                 db.execute("UPDATE records SET value=? WHERE kind='ui' AND key='saved'", (self.pack('ui', 'saved', values),))
-            return message
+        for asset, file in discarded:
+            self.files.discard(asset, file)
+        return message
 
     def message(self, sender, client_id):
         with self.lock, self.db() as db:
@@ -290,6 +300,80 @@ class SecureClient:
         if not bootstrap.get('offline'):
             self.remote("/api/devices", {**device, "proof": proof})
         self.import_legacy(profile)
+        self.transfers = FileTransfers(self)
+        with self.vault.db() as db:
+            pending_files = db.execute("SELECT 1 FROM records WHERE kind IN ('file_pending','control_job') LIMIT 1").fetchone()
+        if pending_files:
+            self.transfers.start()
+
+    def remote_binary(self, path, data=None):
+        parsed = urlsplit(self.url)
+        cls = http.client.HTTPSConnection if parsed.scheme == 'https' else http.client.HTTPConnection
+        conn = cls(parsed.hostname, parsed.port, timeout=60)
+        try:
+            conn.request('POST' if data is not None else 'GET', path, body=data,
+                         headers={'Cookie': self.cookie, 'Origin': self.url, 'X-Weiyan-Client': 'web', 'Content-Type': 'application/octet-stream'})
+            response = conn.getresponse()
+            raw = response.read(CHUNK_SIZE + OVERHEAD + 1)
+            if response.status >= 400:
+                try: message = json.loads(raw).get('error', '附件传输未完成。')
+                except ValueError: message = '附件传输未完成。'
+                raise RemoteError(message, response.status)
+            if data is None:
+                if len(raw) > CHUNK_SIZE + OVERHEAD: raise SecurityError('附件分片过大。')
+                return raw
+            return json.loads(raw)
+        except (OSError, http.client.HTTPException) as error:
+            raise RemoteError('附件传输已暂停，网络恢复后继续。', 503) from error
+        finally:
+            conn.close()
+
+    def prepare_files(self, clear, use_prepared=False):
+        clear = copy.deepcopy(clear)
+        files = []
+        containers = [clear] + (clear.get('entries') or [])
+        for container in containers:
+            file = container.get('attachment')
+            if file and file.get('blob'):
+                prepared = self.vault.files.prepare(file, use_prepared)
+                container['attachment'] = prepared
+                files.append(prepared)
+        return clear, files
+
+    def acknowledge(self, mid, messages=()):
+        if self.transfers.pending(mid):
+            return
+        assets = []
+        for message in messages:
+            if message.get('recalled'): continue
+            url = message.get('attachment', {}).get('url')
+            file = self.vault.get('file', url.rsplit('/', 1)[-1]) if url else None
+            if file and file.get('blob') and not self.vault.files.ready(file): assets.append(url.rsplit('/', 1)[-1])
+        if not self.transfers.defer(mid, assets):
+            self.remote('/api/received', {'device_id': self.device_id, 'id': mid})
+
+    @staticmethod
+    def check_blob_references(packet, clear):
+        if not isinstance(clear, dict):
+            raise SecurityError('加密消息格式无效。')
+        entries = clear.get('entries', [])
+        if not isinstance(entries, list) or len(entries) > 8 or any(not isinstance(entry, dict) for entry in entries):
+            raise SecurityError('加密附件列表无效。')
+        containers = [clear] + entries
+        references = []
+        for container in containers:
+            file = container.get('attachment')
+            if file is not None and not isinstance(file, dict):
+                raise SecurityError('加密附件格式无效。')
+            if file and file.get('blob'):
+                file = checked_descriptor(file)
+                transfer = file['blob'].get('transfer')
+                if not transfer:
+                    raise SecurityError('附件缺少签名传输编号。')
+                references.append(transfer)
+        declared = packet.get('blobs', [])
+        if not isinstance(declared, list) or any(not isinstance(b, str) for b in declared) or len(set(declared)) != len(declared) or sorted(references) != sorted(declared):
+            raise SecurityError('附件引用与签名消息不一致。')
 
     def remote(self, path, data=None):
         parsed = urlsplit(self.url)
@@ -360,16 +444,22 @@ class SecureClient:
                 return done
             packet = self.vault.get('control_pending', client_id)
             if packet is None:
+                clear, files = self.prepare_files(clear)
+                if files: extra['blobs'] = [file['blob']['transfer'] for file in files]
                 packet = self.packet(cid, client_id, clear, directory, **extra)
+                self.vault.put('control_files', client_id, files)
                 self.vault.put('control_pending', client_id, packet)
-            try:
-                result = self.remote('/api/relay', {'envelope': packet})
-            except RemoteError as error:
-                if error.status == 409 and '设备列表' in str(error):
-                    self.vault.delete('control_pending', client_id)
-                raise
+        try:
+            for file in self.vault.get('control_files', client_id, []): self.vault.files.upload(self, file)
+            result = self.remote('/api/relay', {'envelope': packet})
+        except RemoteError as error:
+            if error.status == 409 and '设备列表' in str(error):
+                self.vault.delete('control_pending', client_id)
+            raise
+        with self.lock:
             self.vault.put('control_done', client_id, result)
             self.vault.delete('control_pending', client_id)
+            self.vault.delete('control_files', client_id)
             return result
 
     def recall(self, data):
@@ -445,7 +535,12 @@ class SecureClient:
             response = {'type': 'sync_batch', 'request_id': packet['client_id'], 'after': after, 'until': until, 'entries': entries,
                         'done': len(entries) < 8 and len(entries) == len(rows)}
             targets = [d for d in directory if d['device_id'] in (peer, self.device_id)]
-            self.control_send(packet['conversation_id'], 'batch-' + hashlib.sha256(packet['client_id'].encode()).hexdigest(), response, targets, sync_to=peer)
+            batch_id = 'batch-' + hashlib.sha256(packet['client_id'].encode()).hexdigest()
+            if any(entry.get('attachment', {}).get('blob') for entry in entries):
+                self.vault.put('control_job', batch_id, {'cid': packet['conversation_id'], 'clear': response, 'directory': targets, 'extra': {'sync_to': peer}})
+                self.transfers.start()
+            else:
+                self.control_send(packet['conversation_id'], batch_id, response, targets, sync_to=peer)
             return []
         if clear.get('type') != 'sync_batch' or not isinstance(clear.get('entries'), list) or len(clear['entries']) > 8:
             raise SecurityError('同步内容无效。')
@@ -497,10 +592,13 @@ class SecureClient:
             self.vault.put('image', asset_id, validate_image(clear['image']))
             image_url = '/local-images/' + asset_id
         if clear.get('attachment'):
-            file = validate_file(clear['attachment'])
-            self.vault.put('file', asset_id, file)
-            attachment = {k: v for k, v in file.items() if k != 'data'}
-            attachment['url'] = '/local-files/' + asset_id
+            if clear['attachment'].get('blob'):
+                attachment = self.vault.files.import_file(asset_id, clear['attachment'])
+            else:
+                file = validate_file(clear['attachment'])
+                self.vault.put('file', asset_id, file)
+                attachment = {k: v for k, v in file.items() if k != 'data'}
+                attachment['url'] = '/local-files/' + asset_id
         message = {'id': mid, 'client_id': client_id, 'conversation_id': cid, 'body': clear['body'],
                    'sender': clear['sender'], 'created_at': clear['created_at'], 'image': image_url, 'encrypted': True}
         if attachment:
@@ -549,10 +647,12 @@ class SecureClient:
                     group = self.remote('/api/groups?conversation_id=' + quote(cid))['conversation']['group']
                     if group['nickname']:
                         clear['sender'] = {**self.me, 'nickname': group['nickname']}
+                clear, files = self.prepare_files(clear, use_prepared=True)
                 key = secrets.token_bytes(32)
                 packet = {"v": 2, "conversation_id": cid, "sender_id": self.me["id"], "device_id": self.device_id, "client_id": client_id,
                           "ciphertext": b64(bytes(SecretBox(key).encrypt(canonical(clear)))),
                           "keys": {d["device_id"]: b64(SealedBox(PublicKey(unb64(d["box_key"]))).encrypt(key)) for d in directory}}
+                if files: packet['blobs'] = [file['blob']['transfer'] for file in files]
                 packet["signature"] = b64(self.signing.sign(DOMAIN + canonical(packet)).signature)
                 pending = {"packet": packet, "clear": clear}
                 self.vault.put("pending", client_id, pending)
@@ -563,11 +663,16 @@ class SecureClient:
                     self.vault.delete('pending', client_id)
                 raise
             clear = pending["clear"]
+            if clear.get('attachment', {}).get('blob'):
+                self.vault.put('blob_uploaded', clear['attachment']['blob']['transfer'], 'used')
+                self.vault.delete('file_upload', file_id)
             message = {"id": response["id"], "conversation_id": cid, "client_id": client_id, "body": clear["body"], "sender": clear["sender"],
                        "created_at": clear["created_at"], "image": f"/local-images/{image_id}" if image_id else None, "encrypted": True}
             if clear.get('attachment'):
-                message['attachment'] = {k: v for k, v in clear['attachment'].items() if k != 'data'}
+                message['attachment'] = {k: v for k, v in clear['attachment'].items() if k not in ('data', 'blob')}
                 message['attachment']['url'] = '/local-files/' + file_id
+                if clear['attachment'].get('blob'):
+                    message['attachment'].update(streamed=True, ready=True)
             self.vault.save_message(message)
             self.vault.delete("pending", client_id)
             return message
@@ -600,11 +705,11 @@ class SecureClient:
                 cid = packet["conversation_id"]
                 try:
                     if self.vault.get('control_seen', str(item['id'])):
-                        self.remote('/api/received', {'device_id': self.device_id, 'id': item['id']})
+                        self.acknowledge(item['id'])
                         continue
                     old = self.vault.message(packet["sender_id"], packet["client_id"])
                     if old:
-                        self.remote("/api/received", {"device_id": self.device_id, "id": item["id"]})
+                        self.acknowledge(item['id'], [old])
                         continue
                     if cid not in cache:
                         cache[cid] = self.directory(cid, receiving=True)
@@ -618,10 +723,19 @@ class SecureClient:
                     VerifyKey(unb64(sender_device["sign_key"])).verify(DOMAIN + canonical(signed), unb64(packet["signature"]))
                     key = SealedBox(self.private).decrypt(unb64(packet["keys"][self.device_id]))
                     clear = json.loads(SecretBox(key).decrypt(unb64(packet["ciphertext"])))
+                    self.check_blob_references(packet, clear)
                     if 'sync_to' in packet:
-                        result.extend(self.sync_control(packet, clear, directory))
+                        synchronized = self.sync_control(packet, clear, directory)
+                        result.extend(synchronized)
+                        # Persist deferred attachment receipts before marking the envelope seen.
+                        references = []
+                        for entry in clear.get('entries', []):
+                            reference = entry.get('message', {})
+                            if reference.get('sender') and reference.get('client_id'):
+                                stored = self.vault.message(reference['sender']['id'], reference['client_id'])
+                                if stored: references.append(stored)
+                        self.acknowledge(item['id'], references)
                         self.vault.put('control_seen', str(item['id']), True)
-                        self.remote('/api/received', {'device_id': self.device_id, 'id': item['id']})
                         continue
                     if 'recall_of' in packet:
                         if clear.get('type') != 'recall' or clear['sender']['id'] != packet['sender_id']:
@@ -636,7 +750,7 @@ class SecureClient:
                     with self.vault.lock:
                         # Recall may have committed after the first duplicate check.
                         if self.vault.message(packet['sender_id'], packet['client_id']):
-                            self.remote('/api/received', {'device_id': self.device_id, 'id': item['id']})
+                            self.acknowledge(item['id'], [self.vault.message(packet['sender_id'], packet['client_id'])])
                             continue
                         message = self.store_clear(item['id'], cid, packet['client_id'], clear)
                         saved = self.vault.save_message(message)
@@ -646,7 +760,7 @@ class SecureClient:
                         if callback:
                             callback(message)
                     # Acknowledge only after the encrypted SQLite transaction commits.
-                    self.remote("/api/received", {"device_id": self.device_id, "id": item["id"]})
+                    self.acknowledge(item['id'], [message])
                 except (CryptoError, BadSignatureError, KeyError, TypeError, ValueError) as error:
                     self.blocked = {"conversation_id": cid, "error": str(error)}
                     # Keep the ciphertext queued; an unverified message never enters history.
