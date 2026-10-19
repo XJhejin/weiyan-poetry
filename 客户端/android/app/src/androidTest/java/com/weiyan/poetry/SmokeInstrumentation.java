@@ -77,8 +77,16 @@ public class SmokeInstrumentation extends Instrumentation {
             });
             if(layoutError.get()!=null)throw new AssertionError(layoutError.get());
             shell("wm dismiss-keyguard");waitForIdleSync();
-            android.view.accessibility.AccessibilityNodeInfo foregroundRoot=getUiAutomation().getRootInActiveWindow();
-            if(foregroundRoot==null||!"com.weiyan.poetry".contentEquals(foregroundRoot.getPackageName()))throw new AssertionError("The phone app must be in foreground before the real pinch test");
+            // A rendered WebView can precede the accessibility window focus on
+            // a freshly booted emulator. Wait for the actual input target.
+            shell("am start -W -n com.weiyan.poetry/.MainActivity");
+            boolean focused=false;String focusedPackage="none";
+            for(int i=0;i<50&&!focused;i++){
+                android.view.accessibility.AccessibilityNodeInfo foregroundRoot=getUiAutomation().getRootInActiveWindow();
+                if(foregroundRoot!=null){focusedPackage=String.valueOf(foregroundRoot.getPackageName());focused="com.weiyan.poetry".equals(focusedPackage);foregroundRoot.recycle();}
+                if(!focused)Thread.sleep(200);
+            }
+            if(!focused)throw new AssertionError("The phone app must be in foreground before the real pinch test; focused="+focusedPackage);
             pinch(web);
             if(!"true".equals(js(web,"Math.abs(visualViewport.scale-1)<0.01 && document.querySelector('meta[name=viewport]').content.includes('user-scalable=no')")))throw new AssertionError("A real two-finger gesture zoomed the page");
             if("true".equals(args.getString("verifyDefaultTls","false"))){
