@@ -79,7 +79,7 @@ public class SmokeInstrumentation extends Instrumentation {
             shell("wm dismiss-keyguard");waitForIdleSync();
             // A rendered WebView can precede the accessibility window focus on
             // a freshly booted emulator. Wait for the actual input target.
-            shell("am start -W -n com.weiyan.poetry/.MainActivity");
+            shell("am start -W -f 0x30020000 -n com.weiyan.poetry/.MainActivity");
             boolean focused=false;String focusedPackage="none";
             for(int i=0;i<50&&!focused;i++){
                 android.view.accessibility.AccessibilityNodeInfo foregroundRoot=getUiAutomation().getRootInActiveWindow();
