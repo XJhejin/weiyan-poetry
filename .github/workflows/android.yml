@@ -52,8 +52,14 @@ jobs:
             adb install 客户端/android/app/build/outputs/apk/debug/app-debug.apk
             adb install 客户端/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             adb shell pm grant com.weiyan.poetry android.permission.POST_NOTIFICATIONS
+            # A fresh API 35 emulator may leave a Launcher ANR dialog over the
+            # app. Stop only the emulator launcher before testing real input.
+            adb shell am force-stop com.android.launcher3
             adb shell am instrument -w -e server http://10.0.2.2:23180 -e verifyDefaultTls "${{ inputs.verify_default_tls || 'false' }}" com.weiyan.poetry.test/com.weiyan.poetry.SmokeInstrumentation | tee android-smoke.txt
             adb logcat -d > android-logcat.txt
+            mkdir -p build-output
+            adb shell screencap -p /sdcard/weiyan-test-screen.png
+            adb pull /sdcard/weiyan-test-screen.png build-output/weiyan-test-screen.png
             grep -q 'WeiyanSmoke=PASS' android-smoke.txt
             mkdir -p build-output
             adb shell am start -W -n com.weiyan.poetry/.MainActivity
