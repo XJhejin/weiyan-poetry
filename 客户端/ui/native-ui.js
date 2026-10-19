@@ -22,7 +22,7 @@ openSettings=function(){
       const settings=document.createElement('div');settings.className='settings-row';settings.id='background-settings';
       settings.innerHTML='<div>后台运行设置<p>允许不受电池优化限制，关闭界面或息屏后继续接收消息。强行停止后需重新打开客户端。</p></div><button id="open-background-settings">前往设置</button>';
       toggle.parentElement.after(row,settings);
-      const alerts=document.createElement('div');alerts.className='settings-row';alerts.innerHTML='<div>消息弹窗<p>后台新消息使用系统横幅，前台其他会话显示加密消息提示；免打扰会话保持静默。</p></div><button id="message-popup-settings">通知设置</button>';settings.after(alerts);
+      const alerts=document.createElement('div');alerts.className='settings-row';alerts.innerHTML='<div>消息弹窗<p>后台新消息使用系统横幅，前台其他会话显示加密消息提示；免打扰会话仅在被明确 @ 时提醒。连续来信合并提示，通知中不显示正文。</p></div><button id="message-popup-settings">通知设置</button>';settings.after(alerts);
       $('#message-popup-settings').onclick=()=>post('/desktop/background',{action:'notification-settings'}).catch(e=>toast(e.message));
       const startup=document.createElement('div');startup.className='settings-row';startup.innerHTML='<div>自启动与后台运行<p>部分手机还需在应用设置或手机管家中允许自启动、后台活动，并关闭省电限制。</p></div><button id="open-application-settings">应用设置</button>';settings.after(startup);
       $('#open-application-settings').onclick=()=>post('/desktop/background',{action:'application-settings'}).catch(e=>toast(e.message));

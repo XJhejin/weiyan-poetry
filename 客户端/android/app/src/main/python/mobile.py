@@ -56,7 +56,8 @@ def start(profile, ui):
     def notify(message):
         if main.CONFIG.get('native_notifications', True):
             from java import jclass
-            jclass('com.weiyan.poetry.NotificationService').notifyMessage(message['conversation_id'])
+            identity = str(message['sender']['id']) + ':' + str(message.get('client_id', message.get('id', '')))
+            jclass('com.weiyan.poetry.NotificationService').notifyMessage(message['conversation_id'], identity)
     from java import jclass
     service = jclass('com.weiyan.poetry.NotificationService')
     activity = jclass('com.weiyan.poetry.MainActivity')

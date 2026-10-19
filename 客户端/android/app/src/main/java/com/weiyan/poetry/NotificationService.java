@@ -11,6 +11,8 @@ import android.os.IBinder;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
+import java.util.LinkedHashSet;
 
 /** Visible foreground service keeps the encrypted receiver active without the WebView. */
 public class NotificationService extends Service {
@@ -29,6 +31,8 @@ public class NotificationService extends Service {
         }
     };
     private int unread;
+    private long lastAlert = -1;
+    private final LinkedHashSet<String> notified = new LinkedHashSet<>();
     private NotificationManager manager;
     private static final String RUNNING="encrypted_receiver",LEGACY_MESSAGES="encrypted_messages",MESSAGES="encrypted_messages_popup_v2";
     static void initialize(Context context){application=context.getApplicationContext();preferences().edit().putBoolean("initialized",true).apply();}
@@ -76,18 +80,38 @@ public class NotificationService extends Service {
     private Notification.Builder builder(String channel){return Build.VERSION.SDK_INT>=26?new Notification.Builder(this,channel):new Notification.Builder(this);}
     private Notification running(){
         PendingIntent stop=PendingIntent.getService(this,1,new Intent(this,NotificationService.class).setAction("stop"),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-        return builder(RUNNING).setSmallIcon(R.drawable.logo).setContentTitle("未言诗集").setContentText("加密消息服务正在运行").setContentIntent(open("")).setOngoing(true).setShowWhen(false).addAction(new Notification.Action.Builder(null,"停止后台接收",stop).build()).build();
+        return builder(RUNNING).setSmallIcon(R.drawable.logo).setContentTitle("未言诗集").setContentIntent(open("")).setOngoing(true).setShowWhen(false)
+            .setCategory(Notification.CATEGORY_SERVICE).setPriority(Notification.PRIORITY_LOW).setSound(null).setVibrate(new long[0]).setOnlyAlertOnce(true)
+            .addAction(new Notification.Action.Builder(null,"停止后台接收",stop).build()).build();
     }
     public static void notifyMessage(String cid){
         NotificationService service=active;
+        if(service!=null)service.handler.post(()->service.showMessage(cid,""));
+    }
+    public static void notifyMessage(String cid,String messageId){
+        NotificationService service=active;
+        if(service!=null)service.handler.post(()->service.showMessage(cid,messageId));
+    }
+    private void showMessage(String cid,String messageId){
+        NotificationService service=this;
+        if(active!=service)return;
         if(service==null||!isEnabled()||MainActivity.isForeground)return;
         if(Build.VERSION.SDK_INT>=33&&service.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)return;
+        // Retransmission must not increment the badge or alert the same message again.
+        String identity=cid+"\n"+messageId;
+        if(!messageId.isEmpty()){
+            if(!notified.add(identity))return;
+            if(notified.size()>512)notified.remove(notified.iterator().next());
+        }
+        long now=SystemClock.elapsedRealtime();
+        boolean alert=lastAlert<0||now-lastAlert>=3000;
+        if(alert)lastAlert=now;
         service.unread++;
         preferences().edit().putInt("unread",service.unread).apply();
         Notification notification=service.builder(MESSAGES).setSmallIcon(R.drawable.logo).setContentTitle("未言诗集 · "+service.unread+" 条新消息")
             .setContentText("收到新的加密消息，打开客户端查看。").setContentIntent(service.open(cid)).setAutoCancel(true)
             .setVisibility(Notification.VISIBILITY_PRIVATE).setCategory(Notification.CATEGORY_MESSAGE).setPriority(Notification.PRIORITY_HIGH)
-            .setDefaults(Notification.DEFAULT_ALL).setNumber(service.unread).build();
+            .setDefaults(Notification.DEFAULT_ALL).setOnlyAlertOnce(!alert).setNumber(service.unread).build();
         service.manager.notify(2,notification);
     }
     public static void clearUnread(){NotificationService service=active;if(application!=null)preferences().edit().putInt("unread",0).apply();if(service!=null){service.unread=0;service.manager.cancel(2);}}

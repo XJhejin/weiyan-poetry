@@ -43,6 +43,13 @@ cid = alice.call('/api/conversations', {'peer_id': b.me['id']})['conversation'][
 secret = 'Android-Windows-compatible-encryption-' + secrets.token_hex(8)
 a.send({'conversation_id': cid, 'body': secret, 'client_id': 'android-' + secrets.token_hex(8)})
 assert any(m['body'] == secret for m in b.receive())
+original = a.send({'conversation_id': cid, 'body': 'native-quote-source', 'client_id': 'quote-source-' + secrets.token_hex(8)})
+assert any(m['id'] == original['id'] for m in b.receive())
+from message_features import quote_from, mentioned
+reply = b.send({'conversation_id': cid, 'body': '@target reply', 'client_id': 'quote-mention-' + secrets.token_hex(8),
+    'quote': quote_from(original), 'mentions': [{'user_id': a.me['id'], 'start': 0, 'length': 7}]})
+delivered = next(m for m in a.receive() if m['id'] == reply['id'])
+assert delivered['quote']['id'] == original['id'] and mentioned(delivered, a.me['id'])
 file = b'android-encrypted-file-content-' + secrets.token_bytes(64)
 a.vault.put('file', 'testfile', {'data': base64.b64encode(file).decode(), 'name': 'phone.txt', 'size': len(file), 'kind': 'file', 'mime': 'application/octet-stream'})
 sent = a.send({'conversation_id': cid, 'body': '', 'file_id': 'testfile', 'client_id': 'file-' + secrets.token_hex(8)})

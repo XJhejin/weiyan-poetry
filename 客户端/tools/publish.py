@@ -1,4 +1,4 @@
-"""Publish signed Windows, Android and Apple Silicon releases; keys stay local."""
+"""Publish signed Windows, Android and Linux releases; keys stay local."""
 import argparse
 import base64
 import hashlib
@@ -81,7 +81,6 @@ def prepare():
     for kind, name in (
         ('client_windows_msi', f'weiyan-client-{config["VERSION"]}-windows-x64.msi'),
         ('client_android', f'weiyan-client-{config["VERSION"]}-android.apk'),
-        ('server_macos_arm64', f'weiyan-server-{config["VERSION"]}-macos-arm64.dmg'),
         ('control_windows_msi', f'weiyan-control-{config["VERSION"]}-windows-x64.msi'),
         ('server_linux_source', f'weiyan-server-{config["VERSION"]}-linux-source.tar.gz'),
     ):
@@ -120,49 +119,8 @@ def main():
     if not remote or remote[0] != commit:
         raise SystemExit('当前提交尚未同步到 origin；请先推送项目分支。')
     notes_file = files[0].parent / 'release-notes.md'
-    notes_file.write_text(f'''未言诗集 {config['VERSION']}
-
-安装包：
-- Windows 客户端：`weiyan-client-{config['VERSION']}-windows-x64.msi`。安装后自动创建桌面与开始菜单快捷方式。
-- Windows 服务器控制端：`weiyan-control-{config['VERSION']}-windows-x64.msi`。独立安装，通过受限 SSH 授权管理远程服务器；安装包不包含管理私钥。
-- 安卓客户端：`weiyan-client-{config['VERSION']}-android.apk`。Android 7.0+，ARM64 或 x86_64；由维护者固定证书签名。
-- Apple Silicon Mac 服务端：`weiyan-server-{config['VERSION']}-macos-arm64.dmg`。打开后拖入 Applications。
-- Windows 客户端与服务端便携 ZIP 继续提供；完整解压并保留 `_internal`，无需安装 Python。
-
-功能：
-- 2.1.4 图片、视频、文件单项上限统一提高至 10 GB；大附件加密分片传输，支持上传进度、重试与接收恢复。需要客户端及服务端同时升级，完整确认接收后删除服务端暂存密文。
-- 2.1.4 安卓分步申请通知与后台电池权限，已登录的后台服务在关闭界面、划走任务或息屏后继续接收加密消息；可手动停止。部分手机需额外允许自启动与后台活动。
-- 2.1.4 修复双指页面缩放：原生手势拦截与视口限制，保留正常单指滚动与头像缩放滑块。
-- 新增两分钟内消息撤回，支持文字、图片、文件与视频，离线消息同步撤回。
-- 同账号多设备在双方核对指纹后加密同步每个会话最近 50 条记录及附件，自己发送的新消息同步到其他已登记设备。
-- Android 新增前台横幅与后台系统消息弹窗，点击可进入会话；不展示聊天正文并遵循免打扰设置。
-- 2.1.3 将 Windows 和安卓客户端默认连接更新为 156.225.28.175:23074；升级时迁移旧官方默认地址，保留其他自定义地址。
-- 提供 Linux 无界面运行依赖、独立数据目录、systemd 开机自启模板和不含用户资料的源码部署包。
-- 新增独立服务器控制端：查看远程运行状态、内存与磁盘、账号与设备、密文队列及运行日志；支持服务重启和 GitHub 签名更新，启动失败恢复原程序及更新前数据库。
-- 2.1.2 增加服务端自定义 IPv4/IPv6 监听、配置保存和准确的客户端连接地址；修改前先停止服务，启动成功后自动保存。
-- 修复 Mac 服务端 GitHub 更新检查：随包提供 CA 证书，保留 HTTPS 验证；API 不可用时尝试 GitHub Releases 签名清单。旧版无法检查更新时请手动下载本页 DMG 覆盖应用一次。
-- Android 后台接收开关与后台设置入口；允许接收时重启/覆盖升级恢复服务，明确停止后不自行恢复。适配状态栏及刘海/挖孔安全区域，顶部增加 8 dp，禁止双指缩放。
-- 公共房间与群聊资料中新增消息免打扰开关：本机加密保存，仍接收消息并保留会话未读标记，停止该会话的通知和托盘提醒。
-- 2.1.1 修复 Windows 旧版更新助手缺少 `_cffi_backend` 的启动错误；更新前检查独立助手及验签依赖，自检失败保留当前程序运行。
-- 若旧版自动更新已报上述错误，请先下载本页 MSI，退出客户端后安装一次；Windows 原账号下的本机资料与连接设置保留。
-- 个人与群头像图片选择、拖动裁剪及缩放；服务端同步头像，管理页可查看并重置成员头像。
-- 单一公共房间「-扉页-」，好友申请与同意，@用户名/昵称搜索，可直接与非好友私聊。
-- 群聊邀请、群主与管理员、踢出、群名称/头像/公告、禁言、群昵称、群主转让、退群与解散。
-- 文字、图片、文件、视频端到端加密；支持视频预览、播放和拖入附件。图片最多 5 MB，文件/视频每项最多 20 MB。
-- Windows 关闭窗口后留在托盘；有未读时整枚图标闪烁，悬停显示最新消息预览；系统通知使用通用提示。可从客户端设置前往 Windows 任务栏设置固定图标。安卓使用可停止的前台后台接收服务，通知不显示聊天正文。
-- 本机加密记录、草稿、收藏与待发内容；服务端未送达密文永久保留，无软件总容量配额，确认接收后删除。
-- 两端提供 GitHub 更新页；校验 Ed25519 清单签名与 SHA-256。安卓还校验应用签名证书。
-
-默认服务端端口 23074；发布客户端默认连接 `https://156.225.28.175:23074`。此前保存的自定义地址保留。
-该地址已部署 CentOS 无界面服务端，使用受信任的 HTTPS 证书和自动续期；服务端及代理已配置开机自启。账号与待投递密文保存在独立数据目录；管理接口不公开。
-
-Mac 构建仅作临时签名，未取得 Apple Developer ID 公证，首次打开需在 macOS 系统设置确认来源。
-安卓省电策略、强行停止或系统清理可能中断后台接收；重新打开后补收。未提供厂商云推送。
-加密协议尚未独立安全审计，无双棘轮前向保密；首次通信请核对设备指纹。新设备需与保存旧记录的设备双方核对指纹并确认信任，再由旧设备上线加密同步。
-更新保留用户资料；Mac 服务端资料位于 `~/Library/Application Support/WeiyanPoetry/server`。
-
-发布源码提交：{commit}
-''', encoding='utf-8')
+    notes = (ROOT / 'RELEASE_NOTES.md').read_text('utf-8')
+    notes_file.write_text(notes + '\n发布源码提交：' + commit + '\n', encoding='utf-8')
     run([gh, 'release', 'create', 'v' + config['VERSION'], '--repo', config['REPOSITORY'], '--target', commit,
          '--title', '未言诗集 ' + config['VERSION'], '--notes-file', str(notes_file), '--latest',
          *[str(file) for file in files]])

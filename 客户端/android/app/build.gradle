@@ -33,7 +33,7 @@ chaquopy {
     sourceSets { main { srcDirs = [layout.buildDirectory.dir('generated/python').get().asFile] } }
 }
 tasks.register('prepareSharedClient', Sync) {
-    from(clientRoot) { include 'main.py', 'secure.py', 'large_files.py', 'update.py', 'release_config.py', 'background.py' }
+    from(clientRoot) { include 'main.py', 'secure.py', 'message_features.py', 'network_status.py', 'transport_http.py', 'large_files.py', 'update.py', 'release_config.py', 'background.py' }
     from('src/main/python')
     into layout.buildDirectory.dir('generated/python')
 }

@@ -26,6 +26,10 @@ jobs:
         run: python 服务端/tests/test_chat.py
       - name: Test large encrypted file bounds and bounded memory reads
         run: python 客户端/tests/test_large_files.py
+      - name: Test quotes, mentions, instant local history and connection resilience
+        run: |
+          python 服务端/tests/test_message_features.py
+          python 客户端/tests/test_transport.py
       - name: Test administration, migration and signed updates
         run: python 服务端/tests/test_privacy_tools.py
       - name: Test custom IPv4 and IPv6 listening addresses
@@ -49,7 +53,9 @@ jobs:
       - name: Test actual executables
         env:
           WEIYAN_TEST_BINARIES: '1'
-        run: python 服务端/tests/test_chat.py
+        run: |
+          python 服务端/tests/test_chat.py
+          python 服务端/tests/test_message_features.py
       - name: Test copied standalone helper from actual frozen applications
         env:
           WEIYAN_TEST_BINARIES: '1'

@@ -2,6 +2,7 @@
 import ctypes
 import os
 import threading
+import time
 from PIL import Image
 import pystray
 from window_effects import WindowEffects
@@ -19,6 +20,7 @@ class Tray:
         # Toggling Icon.visible would remove/reinsert it and disturb its position.
         self.blank = Image.new('RGBA', self.image.size, (0, 0, 0, 0))
         self.bright = True
+        self.last_alert = None
         self.icon = pystray.Icon('WeiyanPoetry', self.image, '未言诗集', menu=pystray.Menu(
             pystray.MenuItem('打开未言诗集', self.show, default=True),
             pystray.MenuItem('新消息提醒', self.toggle, checked=lambda item: self.config.get('native_notifications', True)),
@@ -66,10 +68,13 @@ class Tray:
 
     def toggle(self, *args):
         self.save_config(not self.config.get('native_notifications', True))
+        if not self.config.get('native_notifications', True):
+            self.clear_unread()
+            self.icon.remove_notification()
         self.icon.update_menu()
 
     def notify(self, message):
-        if self.foreground():
+        if self.foreground() or not self.config.get('native_notifications', True):
             return
         with self.lock:
             self.unread += 1
@@ -82,7 +87,11 @@ class Tray:
             preview = ' '.join(preview.split())
             title = f"未言诗集 · {self.unread} 条新消息\n{message['sender'].get('nickname', '联系人')}：{preview}"
             self.icon.title = title.encode('utf-16-le')[:246].decode('utf-16-le', errors='ignore')
-        if self.config.get('native_notifications', True):
+            now = time.monotonic()
+            alert = self.last_alert is None or now - self.last_alert >= 3
+            if alert:
+                self.last_alert = now
+        if alert:
             self.icon.notify('收到新的加密消息，点击托盘图标查看。', '未言诗集')
 
     def exit(self, *args):

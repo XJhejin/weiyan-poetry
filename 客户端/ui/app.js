@@ -19,7 +19,7 @@ function store(name,value) {
 }
 function conversationNotificationRow(cid) {
   const muted=stored('muted',[]).includes(cid);
-  return `<div class="settings-row"><div>消息免打扰<p>开启后仍接收消息并保留未读标记，不发出系统通知或托盘提醒。仅对本机当前账号生效。</p></div><button class="notification-toggle${muted?' on':''}" id="conversation-mute" role="switch" aria-label="消息免打扰" aria-checked="${muted}" data-mute-conversation="${escape(cid)}"></button></div>`;
+  return `<div class="settings-row"><div>消息免打扰<p>开启后仍接收消息并保留未读标记，普通消息不发出通知或托盘提醒；@ 你的消息仍会提醒。仅对本机当前账号生效。</p></div><button class="notification-toggle${muted?' on':''}" id="conversation-mute" role="switch" aria-label="消息免打扰" aria-checked="${muted}" data-mute-conversation="${escape(cid)}"></button></div>`;
 }
 async function setConversationMuted(cid,enabled) {
   const before=[...stored('muted',[])];
@@ -98,7 +98,7 @@ function connectEvents() {
     if (data.type==='devices') {$('#encryption-info').title='设备目录已更新，点击查看安全指纹';}
     if (data.type==='presence') { state.online=data.online; updateHeader(); renderOnline(); scheduleSync(); }
     if (['conversations','profile','resync'].includes(data.type)) bootstrap({refreshMessages:data.type!=='conversations'}).catch(() => {});
-    if (data.type==='read') { const conv=state.conversations.find(c=>c.id===data.conversation_id); if(conv){if(data.user_id===state.me.id)conv.unread=0;else conv.peer_last_read=data.last_id;} renderList();if(data.conversation_id===state.active && data.user_id!==state.me.id)renderMessages(); }
+    if (data.type==='read') { const conv=state.conversations.find(c=>c.id===data.conversation_id); if(conv){if(data.user_id===state.me.id){conv.unread=0;conv.mention_unread=0;}else conv.peer_last_read=data.last_id;} renderList();if(data.conversation_id===state.active && data.user_id!==state.me.id)renderMessages(); }
     if (data.type==='typing' && data.conversation_id===state.active && data.user_id!==state.me.id) {
       $('#chat-status').textContent=`${data.nickname} 正在写小笺…`; clearTimeout(typingTimer); typingTimer=setTimeout(updateHeader,3500);
     }
@@ -106,6 +106,7 @@ function connectEvents() {
 }
 function showAuth(error='') {
   authGeneration++;clearTimeout(syncTimer);state.signingOut=false;
+  messageCache.clear();observedMessages.clear();resetMentionInput();
   state.stream?.close(); state.stream=null; state.me=null; state.active=null; state.messages.clear(); state.loadedUser=null;localPreferences={};
   $('#app').hidden=true; $('#auth').hidden=false; $('#boot').hidden=true; $('#auth-error').textContent=error;
 }
@@ -150,39 +151,41 @@ function renderList() {
   let convs=state.conversations.filter(c=>c.name.toLowerCase().includes(q) || (c.last_message?.body || '').toLowerCase().includes(q));
   if(state.filter==='unread') convs=convs.filter(c=>c.unread>0);
   convs.sort((a,b)=>(Number(pins.includes(b.id))-Number(pins.includes(a.id))) || ((b.last_message?.id||0)-(a.last_message?.id||0)));
-  const total=state.conversations.filter(c=>!muted.includes(c.id)).reduce((sum,c)=>sum+c.unread,0);
+  const total=state.conversations.reduce((sum,c)=>sum+(muted.includes(c.id)?(c.mention_unread||0):c.unread),0);
   $('#total-unread').hidden=!total; $('#total-unread').textContent=total>99?'99+':total;
   document.title=total?`(${total}) 未言诗集`:'未言诗集 · 每一句，都被温柔听见';
   list.innerHTML=convs.map(c=>{
     const m=c.last_message;
     const prefix=m && m.sender.id!==state.me.id && c.kind!=='direct' ? m.sender.nickname+'：' : '';
-    return `<button class="conversation-item${c.id===state.active?' active':''}" data-conv="${escape(c.id)}">${avatar(c,false,c.kind==='direct'&&state.online.includes(c.peer.id))}<div class="conversation-copy"><div class="conversation-line"><span class="conversation-name">${escape(c.name)}${pins.includes(c.id)?'<svg class="conversation-pin"><use href="#i-pin"/></svg>':''}</span><span class="conversation-time">${m?shortTime(m.created_at):''}</span></div><div class="conversation-line"><span class="conversation-preview">${muted.includes(c.id)?'🔕 ':''}${escape(prefix+(m?(m.body||(m.attachment?(m.attachment.kind==='video'?'[视频]':m.attachment.kind==='image'?'[图片]':'[文件]')+' '+m.attachment.name:'[图片]')):'还没有小笺，打个招呼吧'))}</span>${c.unread?`<span class="unread-badge">${c.unread>99?'99+':c.unread}</span>`:''}</div></div></button>`;
+    return `<button class="conversation-item${c.id===state.active?' active':''}" data-conv="${escape(c.id)}">${avatar(c,false,c.kind==='direct'&&state.online.includes(c.peer.id))}<div class="conversation-copy"><div class="conversation-line"><span class="conversation-name">${escape(c.name)}${pins.includes(c.id)?'<svg class="conversation-pin"><use href="#i-pin"/></svg>':''}</span><span class="conversation-time">${m?shortTime(m.created_at):''}</span></div><div class="conversation-line"><span class="conversation-preview">${muted.includes(c.id)?'🔕 ':''}${c.mention_unread?'<b class="mention-unread">[有人@我] </b>':''}${escape(prefix+(m?(m.body||(m.attachment?(m.attachment.kind==='video'?'[视频]':m.attachment.kind==='image'?'[图片]':'[文件]')+' '+m.attachment.name:'[图片]')):'还没有小笺，打个招呼吧'))}</span>${c.unread?`<span class="unread-badge">${c.unread>99?'99+':c.unread}</span>`:''}</div></div></button>`;
   }).join('')+(convs.length?'':emptyHTML('☁️','这里暂时安安静静的',state.filter==='unread'?'所有小笺都已经读过啦。':'换个名字搜索试试吧。'));
 }
 function emptyHTML(icon,title,description) { return `<div class="empty-state"><span class="empty-icon">${icon}</span>${escape(title)}<br><small>${escape(description)}</small></div>`; }
-function saveDraft() { if(!state.active || !state.me) return; const drafts=stored('drafts'); drafts[state.active]=$('#message-input').value; store('drafts',drafts); }
+function saveDraft() { if(!state.active || !state.me) return; const drafts=stored('drafts'); drafts[state.active]={body:$('#message-input').value,quote:state.reply,mentions:state.mentions||[]}; store('drafts',drafts); }
 async function selectConversation(cid) {
   if(!state.conversations.some(c=>c.id===cid)) await bootstrap();
   if(!state.conversations.some(c=>c.id===cid)) return;
-  saveDraft(); state.active=cid; state.switching++; state.messages.clear(); state.reply=null; state.attachment=null; state.fileAttachment=null; state.pendingClient=null;
+  saveDraft();cacheCurrentMessages();state.active=cid; state.switching++;const cached=messageCache.get(cid);state.messages=new Map(cached?.messages||[]);state.hasMore=cached?.hasMore||false;state.reply=null; state.attachment=null; state.fileAttachment=null; state.pendingClient=null;
   $('#app').classList.add('mobile-chat'); $('#reply-preview').hidden=true; $('#attachment-preview').hidden=true; $('#emoji-picker').hidden=true; $('#new-message-button').hidden=true;
-  $('#message-input').value=stored('drafts')[cid]||''; updateInput();
+  restoreComposerDraft(stored('drafts')[cid]); updateInput();
   store('lastConversation',cid); updateHeader(); renderOnline(); renderList();
-  $('#messages').innerHTML='<div class="empty-state">正在展开你的小笺…</div>';
-  try { await loadMessages(cid); } catch(error) { if(state.active===cid){$('#messages').innerHTML=emptyHTML('☁️','小笺还在路上',error.message);toast(error.message);} }
+  renderMessages();scrollBottom();
+  try { await loadMessages(cid); } catch(error) { if(state.active===cid)toast(error.message); }
 }
 async function loadMessages(cid, preserve=false) {
   const generation=state.switching;
-  const data=await api(`/api/conversations/${encodeURIComponent(cid)}/messages`);
+  const data=await api(`/api/conversations/${encodeURIComponent(cid)}/messages?local=1`);
   if(cid!==state.active || generation!==state.switching) return;
   const nearBottom=isNearBottom();
   state.messages=new Map([...state.messages,...data.messages.map(m=>[m.id,m])]); state.hasMore=data.has_more;
   const confirmed=new Set(data.messages.filter(m=>m.sender.id===state.me.id).map(m=>m.client_id));
   state.outbox=state.outbox.filter(m=>!confirmed.has(m.client_id));store('outbox',state.outbox);
   data.messages.forEach(m=>{if(!state.users.has(m.sender.id))state.users.set(m.sender.id,m.sender);});
-  try{const ids=[...new Set(data.messages.slice(-100).map(m=>m.sender.id))];if(ids.length){const profiles=await api('/api/profiles?conversation_id='+encodeURIComponent(cid)+'&ids='+encodeURIComponent(ids.join(',')));if(cid!==state.active||generation!==state.switching)return;profiles.users.forEach(u=>state.users.set(u.id,u));}}catch{}
   rememberUsers();
   renderMessages(); if(!preserve || nearBottom) scrollBottom();
+  cacheCurrentMessages();
+  const ids=[...new Set(data.messages.slice(-100).map(m=>m.sender.id))];
+  if(ids.length)api('/api/profiles?conversation_id='+encodeURIComponent(cid)+'&ids='+encodeURIComponent(ids.join(','))).then(profiles=>{if(cid!==state.active||generation!==state.switching)return;profiles.users.forEach(u=>state.users.set(u.id,u));renderMessages();}).catch(()=>{});
   markRead(); renderOnline();
 }
 function messageBody(body) {
@@ -198,7 +201,7 @@ function renderMessages() {
     if(m.recalled)return `${divider}<div class="message-date recalled-message" data-message="${m.id}">${own?'你撤回了一条消息':'消息已撤回'}</div>`;
     const read=currentConversation()?.kind==='direct' && currentConversation().peer_last_read>=m.id;
     const delivery=m.status==='sending'?'<span class="send-state">寄送中…</span>':m.status==='failed'?`<button class="retry-send" data-retry="${escape(m.client_id)}">发送失败 · 重试</button>`:own?`<span title="${read?'对方已读':'已加密发送；离线密文投递后删除'}">${icons('check')}${read?' 已读':''}</span>`:'';
-    return `${divider}<article class="message${own?' mine':''}" data-message="${m.id}" tabindex="0"><button class="message-avatar" data-user="${m.sender.id}" title="${escape(m.sender.nickname)}" style="padding:0">${avatar(state.users.get(m.sender.id)||m.sender,true)}</button><div class="message-content"><div class="sender-name">${escape(own?'我':m.sender.nickname)}${m.sender.id==='system'?'<span class="sender-label">小客厅管家</span>':''}</div><div class="message-bubble">${m.image?`<img class="message-image" src="${escape(m.image)}" alt="${escape(m.sender.nickname)}分享的图片" loading="lazy">`:''}${m.attachment?attachmentHTML(m.attachment):''}${m.body?`<div class="message-text">${messageBody(m.body)}</div>`:''}</div><div class="message-time">${clock(m.created_at)}${delivery}</div></div>${m.status?'':`<div class="message-actions"><button data-action="reply" title="回复">${icons('chat')}</button><button data-action="copy" title="复制">${icons('copy')}</button><button data-action="save" title="收藏">${icons('bookmark')}</button><button data-action="more" title="更多">${icons('more')}</button></div>`}</article>`;
+    return `${divider}<article class="message${own?' mine':''}" data-message="${m.id}" tabindex="0"><button class="message-avatar" data-user="${m.sender.id}" title="${escape(m.sender.nickname)}" style="padding:0">${avatar(state.users.get(m.sender.id)||m.sender,true)}</button><div class="message-content"><div class="sender-name">${escape(own?'我':m.sender.nickname)}${m.sender.id==='system'?'<span class="sender-label">小客厅管家</span>':''}</div><div class="message-bubble">${quoteHTML(m.quote)}${m.image?`<img class="message-image" src="${escape(m.image)}" alt="${escape(m.sender.nickname)}分享的图片" loading="lazy">`:''}${m.attachment?attachmentHTML(m.attachment):''}${m.body?`<div class="message-text">${renderMessageText(m)}</div>`:''}</div><div class="message-time">${clock(m.created_at)}${delivery}</div></div>${m.status?'':`<div class="message-actions"><button data-action="reply" title="回复">${icons('chat')}</button><button data-action="copy" title="复制">${icons('copy')}</button><button data-action="save" title="收藏">${icons('bookmark')}</button><button data-action="more" title="更多">${icons('more')}</button></div>`}</article>`;
   }).join('');
 }
 function isNearBottom() { const el=$('#message-scroll'); return el.scrollHeight-el.scrollTop-el.clientHeight<140; }
@@ -208,13 +211,15 @@ function markRead() {
   if(innerWidth<=620&&!$('#app').classList.contains('mobile-chat'))return;
   const ids=[...state.messages.keys()]; if(!ids.length) return;
   const last=Math.max(...ids), cid=state.active;
-  post('/api/read',{conversation_id:cid,last_id:last}).then(()=>{const c=state.conversations.find(c=>c.id===cid);if(c){c.unread=0;renderList();}}).catch(()=>{});
+  post('/api/read',{conversation_id:cid,last_id:last}).then(()=>{const c=state.conversations.find(c=>c.id===cid);if(c){c.unread=0;c.mention_unread=0;renderList();}}).catch(()=>{});
 }
 function receiveMessage(m) {
+  const duplicate=observeMessage(m)||state.messages.has(m.id)||messageCache.get(m.conversation_id)?.messages.has(m.id)||state.conversations.some(c=>c.last_message?.id===m.id);
+  const cached=messageCache.get(m.conversation_id);if(cached)cached.messages.set(m.id,m);
   if(m.recalled || m.history_sync){
     const conv=state.conversations.find(c=>c.id===m.conversation_id);
     if(conv&&(!conv.last_message||conv.last_message.id<=m.id))conv.last_message=m;
-    if(m.recalled){const saved=stored('saved',[]).filter(s=>s.id!==m.id);store('saved',saved);if(state.reply?.id===m.id){state.reply=null;$('#reply-preview').hidden=true;}}
+    if(m.recalled){scrubUIQuotes(m);const saved=stored('saved',[]).filter(s=>s.id!==m.id);store('saved',saved);if(state.reply?.id===m.id){state.reply=null;$('#reply-preview').hidden=true;}}
     if(m.conversation_id===state.active){state.messages.set(m.id,m);renderMessages();}
     renderList();return;
   }
@@ -222,10 +227,10 @@ function receiveMessage(m) {
   state.users.set(m.sender.id,m.sender);
   const conv=state.conversations.find(c=>c.id===m.conversation_id);
   if(!conv) { scheduleSync(); return; }
-  if(conv.last_message?.id===m.id && state.messages.has(m.id)) return;
+  if(duplicate){if(m.conversation_id===state.active){state.messages.set(m.id,m);renderMessages();}return;}
   conv.last_message=m;
   const visible=m.conversation_id===state.active && !document.hidden && (innerWidth>620||$('#app').classList.contains('mobile-chat'));
-  if(m.sender.id!==state.me.id && !visible) {conv.unread++;notify(m,conv);}
+  if(m.sender.id!==state.me.id && !visible) {conv.unread++;if(mentionsMe(m))conv.mention_unread=(conv.mention_unread||0)+1;notify(m,conv);}
   if(m.conversation_id===state.active) {
     const bottom=isNearBottom(); state.messages.set(m.id,m); renderMessages();
     if(bottom || m.sender.id===state.me.id) scrollBottom(); else $('#new-message-button').hidden=false;
@@ -235,29 +240,30 @@ function receiveMessage(m) {
 }
 function notify(m,conv) {
   if(state.native)return;
-  if(stored('muted',[]).includes(conv.id)) return;
+  if(stored('muted',[]).includes(conv.id) && !mentionsMe(m)) return;
   if(stored('notifications',false) && 'Notification' in window && Notification.permission==='granted' && document.hidden) {
     try { const n=new Notification(conv.name,{body:'收到一条已加密消息，打开客户端查看。',icon:'/assets/logo.svg',tag:conv.id});n.onclick=()=>{window.focus();selectConversation(conv.id);n.close();}; } catch { /* The unread badge still notifies. */ }
   }
 }
-function updateInput() { $('#character-count').textContent=`${$('#message-input').value.length} / 2000`; saveDraft(); }
+function updateInput() { trackMentionEdits(); $('#character-count').textContent=`${$('#message-input').value.length} / 2000`; saveDraft(); }
 async function sendMessage() {
   if(state.sending || !state.active) return;
   if(state.filePreparing){toast('附件正在加密上传，请准备完成后发送。');return;}
   let body=$('#message-input').value.trim();
   if(!body && !state.attachment && !state.fileAttachment) {$('#message-input').focus(); return;}
-  if(state.reply) body=`「回复 ${state.reply.sender.nickname}：${(state.reply.body || '[图片]').slice(0,80)}」\n${body}`;
   if(body.length>2000) {toast('消息连同回复最多 2000 个字符，请稍微缩短一点。');return;}
   const client_id=crypto.randomUUID?.() || Date.now()+'-'+Math.random().toString(16).slice(2);
   const outgoing={id:'pending-'+client_id,conversation_id:state.active,body,image_id:state.attachment?.id,image:state.attachment?.url||null,client_id,created_at:new Date().toISOString(),sender:{...state.me},status:'sending'};
+  outgoing.quote=state.reply;outgoing.mentions=outgoingMentions();
   if(state.fileAttachment){outgoing.file_id=state.fileAttachment.id;outgoing.attachment={...state.fileAttachment};}
   state.outbox.push(outgoing);store('outbox',state.outbox);
+  resetMentionInput();
   $('#message-input').value='';state.attachment=null;state.fileAttachment=null;state.reply=null;$('#attachment-preview').hidden=true;$('#reply-preview').hidden=true;updateInput();renderMessages();scrollBottom();$('#message-input').focus();
   await transmitOutgoing(outgoing);
 }
 async function transmitOutgoing(outgoing) {
   if(outgoing.inFlight)return;outgoing.inFlight=true;outgoing.status='sending';if(outgoing.conversation_id===state.active)renderMessages();
-  try {if(!state.stream)throw new Error('正在连接服务端，稍后点击重试即可。');const message=await state.stream.send({conversation_id:outgoing.conversation_id,body:outgoing.body,image_id:outgoing.image_id,file_id:outgoing.file_id,client_id:outgoing.client_id});receiveMessage(message);}
+  try {if(!state.stream)throw new Error('正在连接服务端，稍后点击重试即可。');const message=await state.stream.send({conversation_id:outgoing.conversation_id,body:outgoing.body,image_id:outgoing.image_id,file_id:outgoing.file_id,client_id:outgoing.client_id,quote:outgoing.quote,mentions:outgoing.mentions});receiveMessage(message);}
   catch(error){if(state.outbox.some(m=>m.client_id===outgoing.client_id)){outgoing.status='failed';store('outbox',state.outbox);if(outgoing.conversation_id===state.active)renderMessages();toast(error.message);}}
   finally{outgoing.inFlight=false;store('outbox',state.outbox);}
 }
@@ -314,7 +320,7 @@ function openProfile(user=state.me) {
   };
 }
 function openSettings() {
-  modal('设置',`<div class="settings-row"><div>我的小档案<p>昵称、头像与个人签名</p></div><button id="settings-profile">编辑资料</button></div><div class="settings-row"><div>服务端连接<p>${escape(state.server)}</p></div><button id="settings-connect">更改地址</button></div><div class="settings-row"><div>桌面消息通知<p>窗口在后台时，提醒新的小笺</p></div><button class="notification-toggle${stored('notifications',false)?' on':''}" id="notification-toggle" aria-label="切换桌面通知" aria-pressed="${stored('notifications',false)}"></button></div><div class="settings-row"><div>发送方式<p>Enter 发送，Shift + Enter 换行</p></div><span>⌨️</span></div><div class="settings-row"><div>加密与隐私<p>端到端加密 · 本机加密保存 · 安全指纹</p></div><button id="settings-security">查看详情</button></div><div class="settings-row"><div>软件更新<p>从 GitHub 获取经过签名验证的正式版本</p></div><button id="settings-updates">检查更新</button></div><div class="info-box">未言诗集 2.1<br>文字与图片在客户端加密。服务端仅暂存待投递密文，送达后删除。</div><div class="modal-actions"><button class="text-button" id="logout-button">退出当前账号</button><button class="primary" data-close>布置好啦</button></div>`);
+  modal('设置',`<div class="settings-row"><div>我的小档案<p>昵称、头像与个人签名</p></div><button id="settings-profile">编辑资料</button></div><div class="settings-row"><div>服务端连接<p>${escape(state.server)}</p></div><button id="settings-connect">更改地址</button></div><div class="settings-row"><div>桌面消息通知<p>窗口在后台时，提醒新的小笺</p></div><button class="notification-toggle${stored('notifications',false)?' on':''}" id="notification-toggle" aria-label="切换桌面通知" aria-pressed="${stored('notifications',false)}"></button></div><div class="settings-row"><div>发送方式<p>Enter 发送，Shift + Enter 换行</p></div><span>⌨️</span></div><div class="settings-row"><div>加密与隐私<p>端到端加密 · 本机加密保存 · 安全指纹</p></div><button id="settings-security">查看详情</button></div><div class="settings-row"><div>软件更新<p>从 GitHub 获取经过签名验证的正式版本</p></div><button id="settings-updates">检查更新</button></div><div class="info-box">未言诗集 2.2<br>文字与图片在客户端加密。服务端仅暂存待投递密文，送达后删除。</div><div class="modal-actions"><button class="text-button" id="logout-button">退出当前账号</button><button class="primary" data-close>布置好啦</button></div>`);
   $('#settings-security').onclick=openSecurity;$('#settings-updates').onclick=openUpdates;
   $('#settings-profile').onclick=()=>openProfile(); $('#settings-connect').onclick=openConnection;
   $('#notification-toggle').onclick=async()=>{
@@ -360,7 +366,7 @@ function messageAction(action,id,event) {
   if(m.recalled)return;
   if(action==='recall'){post('/api/recall',{id:m.id,client_id:m.client_id}).then(r=>{receiveMessage(r.message);toast('消息已撤回。');}).catch(e=>toast(e.message));return;}
   if(action==='copy') { if(!m.body){toast('这是一封图片小笺。');return;} copyText(m.body); }
-  if(action==='reply') {state.reply=m;$('#reply-preview').innerHTML=`<b>回复 ${escape(m.sender.nickname)}</b>${escape((m.body||(m.attachment?(m.attachment.kind==='video'?'[视频]':m.attachment.kind==='image'?'[图片]':'[文件]')+' '+m.attachment.name:'[图片]')).slice(0,100))}<button class="icon-button" id="cancel-reply" aria-label="取消回复">${icons('close')}</button>`;$('#reply-preview').hidden=false;$('#cancel-reply').onclick=()=>{state.reply=null;$('#reply-preview').hidden=true;};$('#message-input').focus();}
+  if(action==='reply') setMessageQuote(m);
   if(action==='save'){let saved=stored('saved',[]);if(saved.some(s=>s.id===m.id)){saved=saved.filter(s=>s.id!==m.id);toast('已从收藏中取下。');}else{saved.unshift(m);toast('这句温柔已经收好啦。');}store('saved',saved);if(state.view==='saved')renderList();}
   if(action==='more'){const actions=[{icon:'chat',label:'回复这封小笺',action:()=>messageAction('reply',id)},{icon:'copy',label:'复制文字',action:()=>messageAction('copy',id)},{icon:'bookmark',label:'收藏 / 取消收藏',action:()=>messageAction('save',id)}];if(m.sender.id===state.me.id&&Date.now()-new Date(m.created_at).getTime()<120000)actions.push({icon:'close',label:'撤回消息',action:()=>messageAction('recall',id)});showContext(actions,event.clientX,event.clientY);}
 }
@@ -423,4 +429,4 @@ async function boot() {
   catch(error){showAuth(error.status===401?'':error.message);}
 }
 setInterval(()=>{if(!state.me)checkHealth();},15000);
-boot();
+document.addEventListener('DOMContentLoaded',boot,{once:true});

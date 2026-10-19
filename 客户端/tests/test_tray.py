@@ -12,7 +12,7 @@ class TrayTests(unittest.TestCase):
     def make_tray(self):
         with patch.object(tray.pystray, 'Icon'), patch.object(tray, 'WindowEffects'):
             item = tray.Tray(MagicMock(), Path(tray.__file__).parent / 'ui/assets/logo.png',
-                             {'native_notifications': False}, MagicMock())
+                             {'native_notifications': True}, MagicMock())
         item.foreground = lambda: False
         return item
 
@@ -52,6 +52,18 @@ class TrayTests(unittest.TestCase):
         item.show()
         self.assertEqual(item.unread, 0)
         item.effects.show.assert_called_once()
+
+    def test_burst_messages_merge_alerts_and_global_disable_stops_blinking(self):
+        item = self.make_tray()
+        message = {'body': '提醒', 'sender': {'nickname': '联系人'}}
+        with patch.object(tray.time, 'monotonic', side_effect=[10, 11, 14]):
+            for _ in range(3): item.notify(message)
+        self.assertEqual(item.unread, 3)
+        self.assertEqual(item.icon.notify.call_count, 2)
+        item.config['native_notifications'] = False
+        item.clear_unread()
+        item.notify(message)
+        self.assertEqual(item.unread, 0)
 
 
 if __name__ == '__main__':

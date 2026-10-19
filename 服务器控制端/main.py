@@ -61,9 +61,13 @@ class Handler(BaseHTTPRequestHandler):
         operations = {'/manage/state': 'state', '/manage/host': 'host', '/manage/logs': 'logs',
                       '/manage/update/info': 'update_info', '/manage/update/status': 'update_status'}
         try:
+            if parsed.path == '/manage/connection':
+                return self.send(self.server.remote.info())
+            if parsed.path == '/manage/network':
+                return self.send(self.server.remote.network())
             if parsed.path in operations:
                 return self.send(self.server.remote.call(operations[parsed.path]))
-            names = {'/': 'index.html', '/admin.js': 'admin.js', '/motion.js': 'motion.js',
+            names = {'/': 'index.html', '/admin.js': 'admin.js', '/connection.js': 'connection.js', '/motion.js': 'motion.js',
                      '/admin.css': 'admin.css', '/logo.svg': 'logo.svg'}
             if parsed.path not in names:
                 return self.send({'error': '地址不存在。'}, 404)
@@ -79,11 +83,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.send({'error': '管理请求来源无效。'}, 403)
         try:
             length = int(self.headers.get('Content-Length', '0'))
-            if self.headers.get_content_type() != 'application/json' or not 0 < length <= 4096:
+            if self.headers.get_content_type() != 'application/json' or not 0 < length <= 49152:
                 raise ValueError('管理请求格式无效。')
             payload = json.loads(self.rfile.read(length))
             if not isinstance(payload, dict):
                 raise ValueError('管理请求格式无效。')
+            if self.path == '/manage/connection/scan':
+                return self.send(self.server.remote.scan(payload))
+            if self.path == '/manage/connection/connect':
+                return self.send(self.server.remote.configure(payload))
             operations = {'/manage/action': 'action', '/manage/restart': 'restart',
                           '/manage/update/check': 'update_check', '/manage/update/install': 'update_install'}
             if self.path not in operations:

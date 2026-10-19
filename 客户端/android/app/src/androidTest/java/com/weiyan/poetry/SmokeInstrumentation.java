@@ -47,7 +47,7 @@ public class SmokeInstrumentation extends Instrumentation {
             int action=step==0?MotionEvent.ACTION_DOWN:step==1?MotionEvent.ACTION_POINTER_DOWN|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT):step==13?MotionEvent.ACTION_POINTER_UP|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT):step==14?MotionEvent.ACTION_UP:MotionEvent.ACTION_MOVE;
             if(step>1&&step<13){points[0].x=cx-25-step*10;points[1].x=cx+25+step*10;}
             MotionEvent event=MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,count,properties,points,0,0,1,1,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0);
-            sendPointerSync(event);event.recycle();Thread.sleep(25);
+            if(!getUiAutomation().injectInputEvent(event,true))throw new AssertionError("Real two-finger event injection failed");event.recycle();Thread.sleep(25);
         }
         Thread.sleep(250);
     }
@@ -76,6 +76,9 @@ public class SmokeInstrumentation extends Instrumentation {
                 if(position[1]+phoneWeb.getHeight()>screenBottom-safeBottom)layoutError.set("Composer viewport overlaps navigation bar");
             });
             if(layoutError.get()!=null)throw new AssertionError(layoutError.get());
+            shell("wm dismiss-keyguard");waitForIdleSync();
+            android.view.accessibility.AccessibilityNodeInfo foregroundRoot=getUiAutomation().getRootInActiveWindow();
+            if(foregroundRoot==null||!"com.weiyan.poetry".contentEquals(foregroundRoot.getPackageName()))throw new AssertionError("The phone app must be in foreground before the real pinch test");
             pinch(web);
             if(!"true".equals(js(web,"Math.abs(visualViewport.scale-1)<0.01 && document.querySelector('meta[name=viewport]').content.includes('user-scalable=no')")))throw new AssertionError("A real two-finger gesture zoomed the page");
             if(!NotificationService.batteryUnrestricted())throw new AssertionError("Test device did not grant background battery access");
@@ -109,6 +112,8 @@ public class SmokeInstrumentation extends Instrumentation {
             waitJs(web,"document.querySelector('#conversation-mute')?.getAttribute('aria-checked')==='true' && stored('muted',[]).includes(state.active)");
             js(web,"closeModal();document.querySelector('#message-input').value='安卓加密消息';sendMessage();");
             waitJs(web,"[...state.messages.values()].some(m=>m.body==='安卓加密消息'&&m.encrypted)");
+            js(web,"setMessageQuote([...state.messages.values()].find(m=>m.body==='安卓加密消息'));document.querySelector('#message-input').value='引用回复';updateInput();sendMessage();");
+            waitJs(web,"[...state.messages.values()].some(m=>m.body==='引用回复'&&m.quote?.excerpt==='安卓加密消息') && document.querySelector('.message-quote')!==null");
             if(!"true".equals(js(web,"document.querySelector('#file-button')!==null && document.querySelector('#video-button')!==null && document.querySelector('#encryption-info')!==null")))throw new AssertionError("Phone controls missing");
             js(web,"window.largeUiFile=new File([new Uint8Array([0,0,0,24,102,116,121,112,105,115,111,109]),new Uint8Array(21*1024*1024)],'phone-large.mp4',{type:'video/mp4'});chooseAttachment(window.largeUiFile).then(()=>window.largeUiReady=true).catch(e=>window.uiError=e.message);");
             waitJs(web,"window.largeUiReady===true && state.fileAttachment?.size>20*1024*1024 && document.querySelector('.attachment-video-preview')!==null && !state.filePreparing");
@@ -120,6 +125,8 @@ public class SmokeInstrumentation extends Instrumentation {
             if(!"true".equals(js(web,"!document.querySelector('#message-popup').textContent.includes('popup-private-body')")))throw new AssertionError("Foreground banner revealed plaintext");
             js(web,"document.querySelector('.message-popup-close').click();let oldMuted=stored('muted',[]);store('muted',[...oldMuted,window.popupCid]);receiveMessage({...window.popupTestMessage,id:9000002});window.popupWasSuppressed=document.querySelector('#message-popup').hidden;store('muted',oldMuted);state.active=window.popupOldActive;state.messages=window.popupOldMessages;renderMessages();");
             if(!"true".equals(js(web,"window.popupWasSuppressed")))throw new AssertionError("Muted conversation triggered foreground banner");
+            js(web,"window.mentionPreviousMuted=stored('muted',[]);store('muted',[...window.mentionPreviousMuted,'room:lobby']);window.mentionPreviousActive=state.active;state.active='mention-other';receiveMessage({...window.popupTestMessage,id:9000003,client_id:'popup-mention',body:'@我',mentions:[{user_id:state.me.id,start:0,length:2}]});window.mentionBypass=!document.querySelector('#message-popup').hidden;document.querySelector('.message-popup-close').click();receiveMessage({...window.popupTestMessage,id:9000004,client_id:'popup-history',body:'@我',mentions:[{user_id:state.me.id,start:0,length:2}],history_sync:true});window.historySilent=document.querySelector('#message-popup').hidden;store('muted',window.mentionPreviousMuted);state.active=window.mentionPreviousActive;");
+            if(!"true".equals(js(web,"window.mentionBypass&&window.historySilent")))throw new AssertionError("Mention override or silent history import failed");
             js(web,"post('/api/recall',{id:[...state.messages.values()].find(m=>m.body==='安卓加密消息').id,client_id:[...state.messages.values()].find(m=>m.body==='安卓加密消息').client_id}).then(r=>receiveMessage(r.message)).catch(e=>window.uiError=e.message)");
             waitJs(web,"[...state.messages.values()].some(m=>m.recalled) && document.querySelector('.recalled-message')!==null");
             try(InputStream in=getContext().getAssets().open("smoke.py")){
@@ -147,6 +154,18 @@ public class SmokeInstrumentation extends Instrumentation {
                     if(!notified)Thread.sleep(250);
                 }
                 if(!notified)throw new AssertionError("No encrypted message notification while Activity was in background");
+                for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==1){
+                    CharSequence text=n.getNotification().extras.getCharSequence(android.app.Notification.EXTRA_TEXT);
+                    if(text!=null&&text.toString().contains("加密消息服务正在运行"))throw new AssertionError("Legacy service text is still shown");
+                }
+                NotificationService.notifyMessage(cid,"native-dedup-check");
+                Thread.sleep(150);
+                int noticeCount=0;
+                for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2)noticeCount=n.getNotification().number;
+                if(noticeCount<2)throw new AssertionError("Consecutive incoming messages did not update notification count");
+                NotificationService.notifyMessage(cid,"native-dedup-check");
+                Thread.sleep(150);
+                for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2&&n.getNotification().number!=noticeCount)throw new AssertionError("Duplicate native notification changed unread count");
                 NotificationService.clearUnread();
                 Python.getInstance().getModule("builtins").callAttr("exec",
                     "b.vault.put('ui','muted',['room:lobby'])\nmuted_sent=a.send({'conversation_id':'room:lobby','body':'muted-room-marker','client_id':'mute-'+secrets.token_hex(8)})",globals);
@@ -157,6 +176,12 @@ public class SmokeInstrumentation extends Instrumentation {
                 }
                 if(!receivedMuted)throw new AssertionError("Muted room message was not received and stored");
                 for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2)throw new AssertionError("Muted room triggered a notification");
+                Python.getInstance().getModule("builtins").callAttr("exec",
+                    "mention_id='mention-'+secrets.token_hex(8)\na.send({'conversation_id':'room:lobby','body':'@target','client_id':mention_id,'mentions':[{'user_id':b.me['id'],'start':0,'length':7}]})",globals);
+                boolean mentionNotified=false;
+                for(int i=0;i<60&&!mentionNotified;i++){for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2)mentionNotified=true;if(!mentionNotified)Thread.sleep(250);}
+                if(!mentionNotified)throw new AssertionError("Explicit mention did not bypass room mute in native background notifications");
+                NotificationService.clearUnread();
                 getTargetContext().startService(new Intent(getTargetContext(),NotificationService.class).setAction("stop"));
                 for(int i=0;i<40&&NotificationService.isRunning();i++)Thread.sleep(100);
                 if(NotificationService.isEnabled()||NotificationService.isRunning())throw new AssertionError("Explicit stop must disable background reception");

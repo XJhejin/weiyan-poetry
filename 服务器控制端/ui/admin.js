@@ -11,7 +11,7 @@ function queueSize(bytes){return bytes>=1073741824?(bytes/1073741824).toFixed(2)
 function date(v){return new Date(typeof v==='number'?v*1000:v).toLocaleString('zh-CN',{hour12:false});}
 function accountAvatar(user){const icons={bunny:'🐰',cat:'🐱',bear:'🐻',flower:'🌼',moon:'🌙',sparkles:'✨'};return `<span class="account-avatar">${/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(user.avatar||'')?`<img src="${esc(user.avatar)}" alt="${esc(user.nickname)}的头像">`:icons[user.avatar]||'🌼'}</span>`;}
 function confirmAction(title,text){$('#confirm-title').textContent=title;$('#confirm-text').textContent=text;WeiyanMotion.openDialog($('#confirm'));return new Promise(resolve=>{$('#confirm-cancel').onclick=()=>{WeiyanMotion.closeDialog($('#confirm'));resolve(false);};$('#confirm-ok').onclick=()=>{WeiyanMotion.closeDialog($('#confirm'));resolve(true);};$('#confirm').oncancel=()=>resolve(false);});}
-async function refresh(){if(busy)return;try{state=await api('/manage/state');render();}catch(e){$('#service-state').textContent='管理连接暂时中断';$('#status-dot').classList.add('off');$('#service-error').textContent=e.message;}}
+async function refresh(){if(busy)return;busy=true;try{state=await api('/manage/state');render();}catch(e){$('#service-state').textContent='管理连接暂时中断';$('#status-dot').classList.add('off');$('#service-error').textContent=e.message;}finally{busy=false;}}
 function updateListenMode(){const custom=$('#listen-host').value==='custom';$('#custom-listen').hidden=!custom;$('#listen-address').required=custom;}
 function renderListenConfig(){
   if(!listenDirty||state.running){

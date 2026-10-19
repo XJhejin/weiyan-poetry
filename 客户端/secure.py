@@ -27,6 +27,8 @@ from nacl.secret import SecretBox
 from nacl.signing import SigningKey, VerifyKey
 from nacl.exceptions import CryptoError, BadSignatureError
 from large_files import MAX_SIZE, CHUNK_SIZE, OVERHEAD, EncryptedFiles, FileTransfers, checked_descriptor
+from message_features import checked_mentions, checked_quote, quote_from, mentioned, scrub_quote
+from transport_http import pool_for
 
 DOMAIN = b"WeiyanPoetry/envelope/v2\0"
 DEVICE_DOMAIN = b"WeiyanPoetry/device/v2\0"
@@ -230,6 +232,21 @@ class Vault:
                        'sender': sender, 'created_at': previous['created_at'] if previous else created_at,
                        'body': '消息已撤回', 'image': None, 'encrypted': True, 'recalled': True}
             db.execute('INSERT OR REPLACE INTO history VALUES (?,?,?,?,?)', (target['id'], cid, sender['id'], target['client_id'], self.pack('message', target['id'], message)))
+            # A recall also removes snapshots embedded in other messages and drafts.
+            for mid, raw in list(db.execute('SELECT id,value FROM history WHERE cid=?', (cid,))):
+                value = self.unpack('message', mid, raw)
+                before = canonical(value)
+                scrub_quote(value, target, sender['id'])
+                if canonical(value) != before:
+                    db.execute('UPDATE history SET value=? WHERE id=?', (self.pack('message', mid, value), mid))
+            for kind, key, raw in list(db.execute("SELECT kind,key,value FROM records WHERE kind IN ('ui','pending')")):
+                value = self.unpack(kind, key, raw)
+                before = canonical(value)
+                # Pending ciphertext remains immutable for safe retransmission. Its
+                # local display copy and all editable drafts are scrubbed instead.
+                scrub_quote(value, target, sender['id'])
+                if canonical(value) != before:
+                    db.execute('UPDATE records SET value=? WHERE kind=? AND key=?', (self.pack(kind, key, value), kind, key))
             if previous:
                 for kind, url in [('image', previous.get('image')), ('file', previous.get('attachment', {}).get('url'))]:
                     if url:
@@ -252,6 +269,19 @@ class Vault:
             row = db.execute("SELECT id,value FROM history WHERE sender=? AND client_id=?", (sender, client_id)).fetchone()
             return self.unpack("message", row[0], row[1]) if row else None
 
+    def message_by_id(self, mid, cid):
+        with self.lock, self.db() as db:
+            row = db.execute('SELECT value FROM history WHERE id=? AND cid=?', (mid, cid)).fetchone()
+            return self.unpack('message', mid, row[0]) if row else None
+
+    def resolve_quote(self, quote, cid):
+        quote = checked_quote(quote)
+        if quote:
+            original = self.message(quote['sender_id'], quote['client_id'])
+            if original and original['conversation_id'] == cid and original['id'] == quote['id']:
+                return quote_from(original)
+        return quote
+
     def messages(self, cid=None, before=9223372036854775807, search=None, limit=51):
         with self.lock, self.db() as db:
             rows = db.execute("SELECT id,value FROM history WHERE id<?" + (" AND cid=?" if cid else "") + " ORDER BY id DESC", (before, cid) if cid else (before,))
@@ -268,9 +298,11 @@ class Vault:
         cid = conv["id"]
         read = self.get("read", cid, 0)
         with self.lock, self.db() as db:
-            count = sum(not self.unpack('message', mid, value).get('recalled') for mid, value in db.execute('SELECT id,value FROM history WHERE cid=? AND id>? AND sender!=?', (cid, read, uid)))
+            unread = [self.unpack('message', mid, value) for mid, value in db.execute('SELECT id,value FROM history WHERE cid=? AND id>? AND sender!=?', (cid, read, uid))]
+            count = sum(not m.get('recalled') for m in unread)
+            mention_count = sum(not m.get('recalled') and mentioned(m, uid) for m in unread)
         last = self.messages(cid, limit=1)
-        conv.update(last_message=last[0] if last else None, unread=count)
+        conv.update(last_message=last[0] if last else None, unread=count, mention_unread=mention_count)
         return conv
 
 
@@ -278,6 +310,7 @@ class SecureClient:
     def __init__(self, profile, server_url, cookie, bootstrap):
         self.url, self.cookie = server_url, cookie
         self.me = bootstrap["me"]
+        self.local_conversations = bootstrap.get('conversations', [])
         self.server_id = bootstrap["server_id"]
         identity = hashlib.sha256((self.server_id + ":" + self.me["id"]).encode()).hexdigest()
         self.vault = Vault(Path(profile) / "secure" / identity)
@@ -376,21 +409,16 @@ class SecureClient:
             raise SecurityError('附件引用与签名消息不一致。')
 
     def remote(self, path, data=None):
-        parsed = urlsplit(self.url)
-        cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-        conn = cls(parsed.hostname, parsed.port, timeout=20)
         try:
-            conn.request("POST" if data is not None else "GET", path, body=canonical(data) if data is not None else None,
-                         headers={"Cookie": self.cookie, "Origin": self.url, "X-Weiyan-Client": "web", "Content-Type": "application/json"})
-            response = conn.getresponse()
-            value = json.loads(response.read())
-            if response.status >= 400:
-                raise RemoteError(value.get("error", "服务端暂时无法响应。"), response.status)
+            status, _, raw = pool_for(self.url).request('POST' if data is not None else 'GET', path,
+                body=canonical(data) if data is not None else None,
+                headers={"Cookie": self.cookie, "Origin": self.url, "X-Weiyan-Client": "web", "Content-Type": "application/json"})
+            value = json.loads(raw)
+            if status >= 400:
+                raise RemoteError(value.get("error", "服务端暂时无法响应。"), status)
             return value
         except (OSError, http.client.HTTPException) as error:
             raise RemoteError("连接暂时断开了，小笺已留在本机。", 503) from error
-        finally:
-            conn.close()
 
     @staticmethod
     def fingerprint(device):
@@ -569,6 +597,7 @@ class SecureClient:
                         continue
                     stored = self.store_clear(message['id'], message['conversation_id'], message['client_id'],
                                               {'body': message['body'], 'sender': message['sender'], 'created_at': message['created_at'],
+                                               'quote': message.get('quote'), 'mentions': message.get('mentions'),
                                                'image': entry.get('image'), 'attachment': entry.get('attachment')})
                     saved = self.vault.save_message(stored)
                 if saved:
@@ -586,6 +615,8 @@ class SecureClient:
     def store_clear(self, mid, cid, client_id, clear):
         if not isinstance(clear['body'], str) or len(clear['body']) > 2000:
             raise SecurityError('消息正文无效。')
+        mentions = checked_mentions(clear['body'], clear.get('mentions'))
+        quote = self.vault.resolve_quote(clear.get('quote'), cid)
         image_url, attachment = None, None
         asset_id = hashlib.sha256((clear['sender']['id'] + ':' + client_id).encode()).hexdigest()
         if clear.get('image'):
@@ -603,6 +634,10 @@ class SecureClient:
                    'sender': clear['sender'], 'created_at': clear['created_at'], 'image': image_url, 'encrypted': True}
         if attachment:
             message['attachment'] = attachment
+        if mentions:
+            message['mentions'] = mentions
+        if quote:
+            message['quote'] = quote
         return message
 
     def send(self, data):
@@ -618,6 +653,13 @@ class SecureClient:
             body = data.get("body", "")
             if not isinstance(body, str) or len(body) > 2000:
                 raise ValueError("消息最多 2000 个字符。")
+            mentions = checked_mentions(body, data.get('mentions'))
+            reference = checked_quote(data.get('quote'))
+            if reference:
+                original = self.vault.message(reference['sender_id'], reference['client_id'])
+                if not original or original['id'] != reference['id'] or original['conversation_id'] != cid:
+                    raise ValueError('引用的消息不在当前会话的本机记录中。')
+                reference = quote_from(original)
             image_id = data.get("image_id")
             image = self.vault.get("image", image_id) if image_id else None
             file_id = data.get('file_id')
@@ -635,12 +677,19 @@ class SecureClient:
                 raise SecurityError("联系人设备发生变化，发送已暂停。请点击加密标识核对安全指纹。")
             if cid.startswith("dm:") and not any(d["user_id"] != self.me["id"] for d in directory):
                 raise SecurityError("对方尚未建立加密设备，请让对方先登录客户端。")
+            if mentions:
+                ids = {item['user_id'] for item in mentions}
+                participants = self.remote('/api/participants?conversation_id=' + quote(cid) + '&ids=' + quote(','.join(sorted(ids))))['users']
+                if ids != {user['id'] for user in participants}:
+                    raise ValueError('@ 的成员已不在当前会话，请重新选择。')
             pending = self.vault.get("pending", client_id)
             if pending and pending["packet"]["conversation_id"] != cid:
                 raise ValueError("消息编号与会话不匹配。")
             if pending is None:
                 created = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".000Z"
                 clear = {"body": body, "image": image, "sender": self.me, "created_at": created}
+                if mentions: clear['mentions'] = mentions
+                if reference: clear['quote'] = reference
                 if attachment:
                     clear['attachment'] = attachment
                 if cid.startswith('group:'):
@@ -668,6 +717,8 @@ class SecureClient:
                 self.vault.delete('file_upload', file_id)
             message = {"id": response["id"], "conversation_id": cid, "client_id": client_id, "body": clear["body"], "sender": clear["sender"],
                        "created_at": clear["created_at"], "image": f"/local-images/{image_id}" if image_id else None, "encrypted": True}
+            if clear.get('quote'): message['quote'] = self.vault.resolve_quote(clear['quote'], cid)
+            if clear.get('mentions'): message['mentions'] = clear['mentions']
             if clear.get('attachment'):
                 message['attachment'] = {k: v for k, v in clear['attachment'].items() if k not in ('data', 'blob')}
                 message['attachment']['url'] = '/local-files/' + file_id

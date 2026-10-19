@@ -18,10 +18,14 @@ import hashlib
 import base64
 import re
 import time
+import queue
+import socket
 from secure import SecureClient, SecurityError, RemoteError, protect, validate_file
 from large_files import CHUNK_SIZE, MAX_SIZE
 from update import Updater
 from release_config import VERSION
+from network_status import NetworkStatus
+from transport_http import pool_for
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "ui"
@@ -32,6 +36,7 @@ DEFAULT_SERVER = "https://156.225.28.175:23074"
 LEGACY_DEFAULT_SERVER = "http://113.219.237.106:23074"
 DEFAULT_SERVER_REVISION = 1
 CONFIG = {"server_url": DEFAULT_SERVER, "default_server_revision": DEFAULT_SERVER_REVISION}
+NETWORK_STATUS = NetworkStatus()
 
 
 def load_config():
@@ -158,6 +163,8 @@ class Gateway(BaseHTTPRequestHandler):
                         from java import jclass
                         jclass('com.weiyan.poetry.MainActivity').requestNotifications()
                 return self.json_response({'enabled': CONFIG.get('native_notifications', True), 'native': bool(getattr(self.server, 'background', None)), 'platform': os.environ.get('WEIYAN_PLATFORM', 'windows')})
+            if path == '/desktop/network' and self.command == 'GET':
+                return self.json_response(NETWORK_STATUS.probe(CONFIG['server_url']))
             if path == '/desktop/background' and os.environ.get('WEIYAN_PLATFORM') == 'android':
                 from java import jclass
                 service, activity = jclass('com.weiyan.poetry.NotificationService'), jclass('com.weiyan.poetry.MainActivity')
@@ -285,6 +292,7 @@ class Gateway(BaseHTTPRequestHandler):
                 self.server.contexts[key] = context
             else:
                 context.me = data["me"]
+                context.local_conversations = data.get('conversations', [])
             if getattr(self.server, 'background', None):
                 self.server.background.activate(context, data)
         return context, data
@@ -299,8 +307,11 @@ class Gateway(BaseHTTPRequestHandler):
         return result
 
     def secure_api(self, path):
-        context, bootstrap = self.context(cached=path.startswith(('/desktop/attachments/', '/local-files/')))
         params = parse_qs(urlsplit(self.path).query)
+        local_history = bool(re.fullmatch(r'/api/conversations/[^/]+/messages', path) and params.get('local', [''])[0] == '1')
+        context, bootstrap = self.context(cached=local_history or path.startswith(('/desktop/attachments/', '/local-files/', '/local-images/')) or path in ('/desktop/storage', '/api/search'))
+        if bootstrap is None:
+            bootstrap = {'conversations': context.local_conversations}
         if path == '/desktop/attachments/chunk' and self.command == 'POST':
             length = int(self.headers.get('Content-Length', '-1'))
             if self.headers.get_content_type() != 'application/octet-stream' or not 0 <= length <= CHUNK_SIZE:
@@ -465,28 +476,28 @@ class Gateway(BaseHTTPRequestHandler):
             before = int(params.get("before", ["9223372036854775807"])[0])
             if before < 0 or before > 9223372036854775807:
                 raise ValueError("消息编号无效。")
-            try:
-                context.receive()
-            except RemoteError as error:
-                if error.status != 503:
-                    raise
+            if not local_history:
+                try:
+                    context.receive()
+                except RemoteError as error:
+                    if error.status != 503:
+                        raise
+            if 'message_id' in params:
+                mid = int(params['message_id'][0])
+                message = context.vault.message_by_id(mid, cid)
+                return self.json_response({'message': message})
             messages = context.vault.messages(cid, before)
             return self.json_response({"messages": list(reversed(messages[:50])), "has_more": len(messages) > 50})
         return self.json_response({"error": "没有找到这个地址。"}, 404)
 
     def upstream(self, path, data=None, timeout=20):
         parsed = urlsplit(CONFIG["server_url"])
-        cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-        connection = cls(parsed.hostname, parsed.port, timeout=timeout)
         headers = {"Host": parsed.netloc, "Origin": CONFIG["server_url"], "X-Weiyan-Client": "web", "Cookie": self.relay_cookie(), "Content-Type": "application/json"}
         try:
-            connection.request("POST" if data is not None else "GET", path, body=json.dumps(data, ensure_ascii=False).encode() if data is not None else None, headers=headers)
-            response = connection.getresponse()
-            return response.status, response.getheaders(), response.read()
+            return pool_for(CONFIG['server_url']).request('POST' if data is not None else 'GET', path,
+                body=json.dumps(data, ensure_ascii=False).encode() if data is not None else None, headers=headers, timeout=timeout)
         except (OSError, http.client.HTTPException) as error:
             raise RemoteError("还没有连接到服务端。请先启动服务端，或检查连接地址。", 503) from error
-        finally:
-            connection.close()
 
     def websocket_proxy(self):
         from simple_websocket import Server, Client, ConnectionClosed, ConnectionError
@@ -517,10 +528,34 @@ class Gateway(BaseHTTPRequestHandler):
         environ.update({"HTTP_" + name.upper().replace("-", "_"): value for name, value in self.headers.items()})
         local = None
         self.close_connection = True
-        polled = 0
+        stopped, wake = threading.Event(), threading.Event()
+        outgoing, jobs = queue.Queue(), queue.Queue(maxsize=128)
+        def receive_messages():
+            while not stopped.is_set():
+                try:
+                    for message in context.receive():
+                        outgoing.put({'type': 'message', 'message': message})
+                    if context.blocked:
+                        outgoing.put({'type': 'security', 'blocked': context.blocked})
+                except (OSError, ValueError):
+                    pass
+                wake.wait(5)
+                wake.clear()
+        def send_messages():
+            while not stopped.is_set():
+                try: payload = jobs.get(timeout=.5)
+                except queue.Empty: continue
+                if stopped.is_set(): break
+                try:
+                    message = context.send(payload)
+                    outgoing.put({'type': 'ack', 'client_id': payload['client_id'], 'message': message})
+                except (ValueError, OSError) as error:
+                    outgoing.put({'type': 'nack', 'client_id': payload.get('client_id'), 'error': str(error)})
         context.active_sockets = getattr(context, 'active_sockets', 0) + 1
         try:
             local = Server(environ, ping_interval=12, max_message_size=32768)
+            threading.Thread(target=receive_messages, daemon=True, name='socket-inbox').start()
+            threading.Thread(target=send_messages, daemon=True, name='socket-sender').start()
             while local.connected and upstream.connected:
                 packet = local.receive(timeout=0.03)
                 if packet is not None:
@@ -532,8 +567,8 @@ class Gateway(BaseHTTPRequestHandler):
                         if payload.get("op") == "ping":
                             upstream.send(json.dumps({"op": "ping"}))
                         elif payload.get("op") == "message":
-                            message = context.send(payload)
-                            local.send(json.dumps({"type": "ack", "client_id": payload["client_id"], "message": message}, ensure_ascii=False))
+                            try: jobs.put_nowait(payload)
+                            except queue.Full: raise ValueError('待发送消息较多，请稍后重试。')
                         else:
                             raise ValueError("不支持的消息类型。")
                     except ValueError as error:
@@ -542,20 +577,20 @@ class Gateway(BaseHTTPRequestHandler):
                 if packet is not None:
                     event = json.loads(packet)
                     if event.get("type") == "relay":
-                        polled = 0
+                        wake.set()
                     else:
                         local.send(packet)
-                if time.monotonic() - polled > 1.5:
-                    if receiver_paused():
-                        break
-                    for message in context.receive():
-                        local.send(json.dumps({"type": "message", "message": message}, ensure_ascii=False))
-                    if context.blocked:
-                        local.send(json.dumps({"type": "security", "blocked": context.blocked}, ensure_ascii=False))
-                    polled = time.monotonic()
+                if receiver_paused():
+                    break
+                for _ in range(100):
+                    try: event = outgoing.get_nowait()
+                    except queue.Empty: break
+                    local.send(json.dumps(event, ensure_ascii=False))
         except (ConnectionClosed, OSError, RemoteError):
             pass
         finally:
+            stopped.set()
+            wake.set()
             context.active_sockets = max(0, getattr(context, 'active_sockets', 1) - 1)
             for connection in (local, upstream):
                 if connection:
@@ -614,6 +649,11 @@ class Gateway(BaseHTTPRequestHandler):
 
 class LocalServer(ThreadingHTTPServer):
     daemon_threads = True
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return connection, address
 
     def handle_error(self, *args):
         pass

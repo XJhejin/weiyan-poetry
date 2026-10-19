@@ -24,8 +24,8 @@ if(/WeiyanAndroid/.test(navigator.userAgent)){
   popup.querySelector('.message-popup-open').onclick=()=>window.weiyanOpenNotification(popup.dataset.conversation);
   const originalReceiveMessage=receiveMessage;
   receiveMessage=function(message){
-    const duplicate=state.messages.has(message.id)||state.conversations.some(c=>c.last_message?.id===message.id);
-    const show=allowNotices&&!duplicate&&!document.hidden&&state.me&&message.sender.id!==state.me.id&&(message.conversation_id!==state.active||!$('#app').classList.contains('mobile-chat'))&&!message.recalled&&!message.history_sync&&!stored('muted',[]).includes(message.conversation_id);
+    const duplicate=observedMessages.has(messageIdentity(message))||state.messages.has(message.id)||messageCache.get(message.conversation_id)?.messages.has(message.id)||state.conversations.some(c=>c.last_message?.id===message.id);
+    const show=allowNotices&&!duplicate&&!document.hidden&&state.me&&message.sender.id!==state.me.id&&(message.conversation_id!==state.active||!$('#app').classList.contains('mobile-chat'))&&!message.recalled&&!message.history_sync&&(!stored('muted',[]).includes(message.conversation_id)||mentionsMe(message));
     originalReceiveMessage(message);
     if(show){popup.dataset.conversation=message.conversation_id;popup.hidden=false;clearTimeout(popupTimer);popupTimer=setTimeout(dismiss,6000);}
   };

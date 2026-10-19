@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 import threading
 import time
+from collections import deque
 from secure import SecureClient, protect, RemoteError
+from message_features import mentioned
 
 
 class BackgroundAgent:
@@ -15,6 +17,7 @@ class BackgroundAgent:
         self.stop_event = threading.Event()
         self.saved = self.profile / 'background-session.dpapi'
         self.enabled, self.poll_with_socket = enabled, poll_with_socket
+        self.notified = deque(maxlen=512)
 
     def start(self):
         try:
@@ -43,8 +46,13 @@ class BackgroundAgent:
         with self.lock:
             if self.active is not context or message['sender']['id'] == context.me['id'] or message.get('recalled') or message.get('history_sync'):
                 return
-        if not self.enabled() or message['conversation_id'] in context.vault.get('ui', 'muted', []):
-            return
+            if not self.enabled() or (message['conversation_id'] in context.vault.get('ui', 'muted', []) and not mentioned(message, context.me['id'])):
+                return
+            identity = (context.me['id'], message['conversation_id'], message['sender']['id'], message.get('client_id', message.get('id')))
+            if identity[-1] is not None and identity in self.notified:
+                return
+            if identity[-1] is not None:
+                self.notified.append(identity)
         try:
             self.notify(message)
         except Exception:

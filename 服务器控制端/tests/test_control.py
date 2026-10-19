@@ -1,4 +1,5 @@
 import http.cookiejar
+import base64
 from http.server import ThreadingHTTPServer
 import json
 import os
@@ -56,6 +57,45 @@ class LocalUITests(unittest.TestCase):
 
 
 class ConnectionTests(unittest.TestCase):
+    def test_manual_settings_validate_host_port_and_pin(self):
+        settings = {'host': '156.225.28.175', 'port': 22, 'user': 'root'}
+        raw = b'\0\0\0\x0bssh-ed25519' + b'\0\0\0\x20' + bytes(range(32))
+        line = settings['host'] + ' ssh-ed25519 ' + base64.b64encode(raw).decode()
+        self.assertTrue(Remote.key_line(settings, line)[1].startswith('SHA256:'))
+        for change in ({'host': '-oProxyCommand=bad'}, {'host': 'https://example.com:22'}, {'port': True}, {'port': 0}, {'user': 'root@elsewhere'}):
+            with self.assertRaises(ValueError): Remote.validate({**settings, **change})
+        with self.assertRaises(ValueError): Remote.key_line({**settings, 'host': 'elsewhere'}, line)
+
+    def test_manual_connection_failure_keeps_saved_authorization(self):
+        with tempfile.TemporaryDirectory() as folder:
+            profile = Path(folder)
+            settings = {'host': '156.225.28.175', 'port': 22, 'user': 'root'}
+            raw = b'\0\0\0\x0bssh-ed25519' + b'\0\0\0\x20' + bytes(range(32))
+            line = settings['host'] + ' ssh-ed25519 ' + base64.b64encode(raw).decode()
+            config = json.dumps({**settings, 'host_key': line})
+            (profile / 'connection.json').write_text(config, 'utf-8')
+            (profile / 'identity.dpapi').write_bytes(b'encrypted-existing-key')
+            remote = Remote(profile)
+            def make_private(path): Path(path).mkdir(parents=True, exist_ok=True)
+            with patch('connection.private_directory', side_effect=make_private), patch('connection.private_file'), patch.object(Remote, '_call', side_effect=ValueError('connection failed')):
+                with self.assertRaisesRegex(ValueError, 'connection failed'):
+                    remote.configure({**settings, 'host_key': line})
+            self.assertEqual((profile / 'connection.json').read_text('utf-8'), config)
+            self.assertEqual((profile / 'identity.dpapi').read_bytes(), b'encrypted-existing-key')
+            with patch('connection.private_directory', side_effect=make_private), patch('connection.private_file'), patch.object(Remote, '_call', return_value={'running': True}):
+                result = remote.configure({**settings, 'host_key': line})
+            self.assertTrue(result['ok'])
+            saved = json.loads((profile / 'connection.json').read_text('utf-8'))
+            self.assertEqual(remote.key_file(saved).read_bytes(), b'encrypted-existing-key')
+            self.assertNotIn('private_key', saved)
+
+    def test_new_server_requires_explicit_fingerprint_confirmation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            remote = Remote(folder)
+            raw = b'\0\0\0\x0bssh-ed25519' + b'\0\0\0\x20' + bytes(range(32))
+            with self.assertRaisesRegex(ValueError, '核对主机指纹'):
+                remote.configure({'host': 'example.com', 'port': 22, 'user': 'root', 'host_key': 'example.com ssh-ed25519 ' + base64.b64encode(raw).decode()})
+
     @unittest.skipUnless(os.name == 'nt', 'Windows DPAPI')
     def test_private_key_is_account_encrypted(self):
         raw = b'not-a-real-private-key'

@@ -5,6 +5,8 @@ class IMTransport {
   constructor(onEvent, onState) {
     this.onEvent=onEvent; this.onState=onState; this.pending=new Map();
     this.attempt=0; this.stopped=false; this.socket=null; this.lastPong=Date.now();
+    this.resume=()=>{if(this.stopped||document.hidden)return;if(!this.socket||this.socket.readyState>=WebSocket.CLOSING){clearTimeout(this.reconnect);this.connect();}else if(this.socket.readyState===WebSocket.OPEN){if(Date.now()-this.lastPong>35000)this.socket.close();else this.socket.send(JSON.stringify({op:'ping'}));}};
+    window.addEventListener('online',this.resume);document.addEventListener('visibilitychange',this.resume);
     this.connect();
   }
   connect() {
@@ -45,19 +47,19 @@ class IMTransport {
   send(payload) {
     if(this.stopped || this.socket?.readyState!==WebSocket.OPEN)return Promise.reject(new Error('连接暂时断开了，小笺已留在这里，重连后可以重试。'));
     return new Promise((resolve,reject)=>{
-      const item={payload:{...payload,op:'message'},resolve,reject,attempts:0,timer:null};
+      const item={payload:{...payload,op:'message'},resolve,reject,attempts:0,timer:null,started:Date.now()};
       this.pending.set(payload.client_id,item);this.transmit(item);
     });
   }
   transmit(item) {
     clearTimeout(item.timer);
-    if(item.attempts>=3){this.pending.delete(item.payload.client_id);item.reject(new Error('暂时没有收到确认，点击消息旁的「重试」重新寄出。'));return;}
-    item.attempts++;
-    if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(item.payload));
-    item.timer=setTimeout(()=>this.transmit(item),6000);
+    if(item.attempts>=3||Date.now()-item.started>120000){this.pending.delete(item.payload.client_id);item.reject(new Error('暂时没有收到确认，点击消息旁的「重试」重新寄出。'));return;}
+    if(this.socket?.readyState===WebSocket.OPEN){item.attempts++;this.socket.send(JSON.stringify(item.payload));}
+    item.timer=setTimeout(()=>this.transmit(item),15000);
   }
   close() {
     this.stopped=true;clearInterval(this.heartbeat);clearTimeout(this.reconnect);this.socket?.close();
+    window.removeEventListener('online',this.resume);document.removeEventListener('visibilitychange',this.resume);
     for(const item of this.pending.values()){clearTimeout(item.timer);item.reject(new Error('连接已关闭，小笺还在本地。'));}
     this.pending.clear();
   }

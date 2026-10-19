@@ -342,6 +342,29 @@ class Handler(BaseHTTPRequestHandler):
                                                    "contacts": [public_user(r) for r in contacts], "online": online, "online_users": online_users, "server_id": relay.setting(db, "server_id"), "privacy": relay.privacy(db), "group_invites": groups.invitations(db, uid), "friend_requests": friends.pending(db, uid), "outgoing_friend_requests": friends.outgoing(db, uid)})
                     if path == '/api/groups':
                         return self.json_response(groups.details(db, params.get('conversation_id', [''])[0], uid, sys.modules[__name__]))
+                    if path == '/api/participants':
+                        cid = params.get('conversation_id', [''])[0]
+                        access(db, cid, uid)
+                        query = params.get('q', [''])[0].strip().lstrip('@')[:80].casefold()
+                        ids = params.get('ids', [''])[0].split(',') if params.get('ids') else []
+                        if len(ids) > 50 or any(not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', item) for item in ids):
+                            raise ApiError('用户列表格式不正确。')
+                        sql = "SELECT u.* FROM users u WHERE u.disabled=0 AND u.id!='system'"
+                        args = []
+                        if cid != 'room:lobby':
+                            sql += ' AND EXISTS (SELECT 1 FROM members m WHERE m.conversation_id=? AND m.user_id=u.id)'
+                            args.append(cid)
+                        if ids:
+                            sql += ' AND u.id IN (' + ','.join('?' * len(ids)) + ')'
+                            args.extend(ids)
+                        # Filtering before LIMIT keeps offline members searchable.
+                        rows = [public_user(row) for row in db.execute(sql + ' ORDER BY u.nickname,u.id', args)]
+                        if cid.startswith('group:'):
+                            details = groups.details(db, cid, uid, sys.modules[__name__])
+                            names = {m['id']: m.get('group_nickname', '') for m in details['members']}
+                            rows = [{**u, 'group_nickname': names.get(u['id'], '')} for u in rows]
+                        rows = [u for u in rows if not query or query in (u['nickname'] + ' ' + u['username'] + ' ' + u.get('group_nickname', '')).casefold()]
+                        return self.json_response({'users': rows[:50]})
                     if path == '/api/profiles':
                         access(db, params.get('conversation_id', [''])[0], uid)
                         ids = list(dict.fromkeys(params.get('ids', [''])[0].split(',')))
@@ -402,7 +425,8 @@ class Handler(BaseHTTPRequestHandler):
                 raw = self.rfile.read(length)
                 with connect() as db:
                     me = self.auth(db)
-                    return self.json_response(blob_relay.put(db, me['id'], blob_match[1], int(blob_match[2]), raw, ApiError))
+                    result = blob_relay.put(db, me['id'], blob_match[1], int(blob_match[2]), raw, ApiError)
+                return self.json_response(result)
             payload = self.body()
             with connect() as db:
                 if path in ("/api/register", "/api/login", "/api/guest"):
@@ -437,9 +461,13 @@ class Handler(BaseHTTPRequestHandler):
                 me = self.auth(db)
                 uid = me["id"]
                 if path == '/api/blobs':
-                    return self.json_response(blob_relay.create(db, uid, payload, ApiError))
+                    result = blob_relay.create(db, uid, payload, ApiError)
+                    db.commit()
+                    return self.json_response(result)
                 if path == '/api/blobs/cancel':
-                    return self.json_response(blob_relay.cancel(db, uid, payload.get('id'), ApiError))
+                    result = blob_relay.cancel(db, uid, payload.get('id'), ApiError)
+                    db.commit()
+                    return self.json_response(result)
                 if path in ('/api/friends', '/api/contacts'):
                     rate_limit(('friend', uid), 40)
                     return self.json_response(friends.action(db, uid, payload, sys.modules[__name__]))
@@ -506,7 +534,9 @@ class Handler(BaseHTTPRequestHandler):
                     rate_limit(("message", uid), 90)
                     return self.json_response(relay.relay(db, uid, payload, access, ApiError, EVENTS), 201)
                 if path == "/api/received":
-                    return self.json_response(relay.received(db, uid, payload, ApiError))
+                    result = relay.received(db, uid, payload, ApiError)
+                    db.commit()
+                    return self.json_response(result)
                 if path in ("/api/messages", "/api/upload"):
                     raise ApiError("服务端仅接收加密信封，明文与图片请在客户端处理。", 410)
                 if path == "/api/typing":
@@ -635,6 +665,11 @@ def escape_like(value):
 class ChatServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return connection, address
 
     def __init__(self, server_address, handler):
         host, port = listen_address(server_address[0]), listen_port(server_address[1])
