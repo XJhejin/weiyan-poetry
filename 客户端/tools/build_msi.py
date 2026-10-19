@@ -20,10 +20,11 @@ def add(parent, name, **attrs):
 def build(wix, kind='client'):
     version = runpy.run_path(str(ROOT / '客户端/release_config.py'))['VERSION']
     control = kind == 'control'
-    name = '未言诗集服务器控制端' if control else '未言诗集'
+    name = 'HushLeaf 服务器控制端' if control else 'HushLeaf'
+    build_name = '未言诗集服务器控制端' if control else '未言诗集'
     source_folder = '服务器控制端' if control else '客户端'
-    executable_name = name + '.exe'
-    folder = ROOT / 'build-output' / name
+    executable_name = build_name + '.exe'
+    folder = ROOT / 'build-output' / build_name
     if not (folder / executable_name).is_file():
         raise SystemExit('请先构建 ' + name + '。')
     work = ROOT / '.build' / ('control-msi' if control else 'msi')
@@ -31,7 +32,7 @@ def build(wix, kind='client'):
     marker = work / '.install-msi'
     marker.write_text('WeiyanPoetry per-user Windows Installer\n', encoding='utf-8')
     xml = ET.Element('{' + WIX + '}Wix')
-    package = add(xml, 'Package', Name=name, Manufacturer='Weiyan Poetry', Version=version,
+    package = add(xml, 'Package', Name=name, Manufacturer='HushLeaf', Version=version,
                   UpgradeCode='0808c609-659c-41a5-901b-f45107b59335' if control else '48b7cc57-63f1-48ac-9d06-04869d9666d7', Scope='perUser', Language='2052', Codepage='936')
     add(package, 'MajorUpgrade', DowngradeErrorMessage='已安装更新版本的未言诗集。', Schedule='afterInstallInitialize')
     add(package, 'MediaTemplate', EmbedCab='yes', CompressionLevel='high')
@@ -65,7 +66,7 @@ def build(wix, kind='client'):
     add(package, 'StandardDirectory', Id='DesktopFolder')
     add(package, 'Icon', Id='AppIcon', SourceFile=str(ROOT / '客户端/ui/assets/logo.ico'))
     add(package, 'Property', Id='ARPPRODUCTICON', Value='AppIcon')
-    add(package, 'Property', Id='ARPURLINFOABOUT', Value='https://github.com/XJhejin/weiyan-poetry')
+    add(package, 'Property', Id='ARPURLINFOABOUT', Value='https://www.hushleaf.top/')
     ET.SubElement(package, '{' + UI + '}WixUI', {'Id': 'WixUI_Minimal'})
     rtf = work / 'license.rtf'
     license_text = (ROOT / 'LICENSE').read_text('utf-8').replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}').replace('\n', '\\par\n')

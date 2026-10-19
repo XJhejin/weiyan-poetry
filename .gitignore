@@ -29,3 +29,4 @@ _internal/
 **/.gradle/
 **/build/
 **/local.properties
+**/安装包/

@@ -13,28 +13,29 @@ ASSETS = ROOT / "客户端" / "ui" / "assets"
 
 
 def make_icon():
-    # An original transparent book-and-petals mark. No enclosing tile or border.
+    # Original open-book / paired-leaf silhouette, shared by SVG and Android.
     scale = 8
     image = Image.new("RGBA", (96 * scale, 96 * scale), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    pink = (206, 129, 158, 255)
-    def curve(points, width=3.8):
-        draw.line([(round(x * scale), round(y * scale)) for x, y in points], fill=pink, width=round(width * scale), joint="curve")
-        radius = width * scale / 2
-        for x, y in (points[0], points[-1]):
-            x, y = x * scale, y * scale
-            draw.ellipse((int(x-radius), int(y-radius), int(x+radius), int(y+radius)), fill=pink)
-    curve([(16,31),(24,29),(32,29),(40,31),(48,36),(56,31),(64,29),(72,29),(80,31),(80,73),(72,71),(64,72),(56,74),(48,78),(40,74),(32,72),(24,71),(16,73),(16,31)])
-    curve([(48,37),(48,77)])
-    curve([(25,44),(30,44),(35,44.5),(40,46)],2.8)
-    curve([(25,55),(30,55),(35,55.5),(40,57)],2.8)
-    curve([(56,54),(61,52),(66,51.5),(71,52)],2.8)
-    curve([(62,36),(62,24)],3.5)
-    curve([(62,25),(57,24),(53,21),(52,17),(54,13),(57,13),(60,16),(62,21),(64,16),(67,13),(70,13),(72,17),(71,21),(67,24),(62,25)],3)
-    curve([(62,34),(67,33),(70,30),(72,28)],3)
+    def cubic(start, one, two, end):
+        result = []
+        for i in range(81):
+            t = i / 80
+            result.append(tuple(round(((1-t)**3*start[k] + 3*(1-t)**2*t*one[k] + 3*(1-t)*t*t*two[k] + t**3*end[k])*scale) for k in (0,1)))
+        return result
+    for start, one, two, end, other_one, other_two, color in (
+        ((45,79),(23,73),(12,53),(18,20),(38,24),(50,42),'#C57C9D'),
+        ((51,79),(73,73),(84,53),(78,20),(58,24),(46,42),'#A66486'),
+    ):
+        draw.polygon(cubic(start,one,two,end)+cubic(end,other_one,other_two,start),fill=color)
+    for points in (((29,38),(34,48),(39,60),(42,72)),((67,38),(62,48),(57,60),(54,72))):
+        draw.line(cubic(*points),fill='#FFF7FC',width=round(2.7*scale),joint='curve')
+        for x,y in (points[0],points[-1]):
+            r=1.35*scale;draw.ellipse((int(x*scale-r),int(y*scale-r),int(x*scale+r),int(y*scale+r)),fill='#FFF7FC')
     image = image.resize((256,256), Image.Resampling.LANCZOS)
-    image.save(ASSETS / "logo.png")
-    image.save(ASSETS / "logo.ico", sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])
+    image.save(ASSETS / 'logo.png')
+    for folder in (ASSETS, ROOT/'服务端/admin_ui', ROOT/'服务器控制端/ui'):
+        image.save(folder/'logo.ico', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])
 
 
 def build(staging_only=False):

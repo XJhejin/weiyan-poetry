@@ -1,5 +1,5 @@
 'use strict';
-const networkStatus=document.createElement('button');networkStatus.className='client-network-status';networkStatus.id='client-network-status';networkStatus.textContent='服务器延迟 — · 探测丢失率 —';networkStatus.title='最近 30 次 HTTPS/HTTP 健康探测的往返耗时和失败比例，包含连接及服务处理时间。每 15 秒探测一次，并非 ICMP 丢包率。点击立即刷新。';
+const networkStatus=document.createElement('button');networkStatus.className='client-network-status';networkStatus.id='client-network-status';networkStatus.textContent='服务器延迟 — · 探测丢失率 —';networkStatus.title='最近 30 次 HTTPS/HTTP 健康探测的往返耗时和失败比例，复用聊天连接；首次连接或断线重连包含握手时间。每 15 秒探测一次，并非 ICMP 丢包率。点击立即刷新。';
 $('#connection-text').parentElement.append(networkStatus);
 let networkChecking=false;
 async function refreshNetworkStatus(){

@@ -57,9 +57,9 @@ def start(profile, ui):
         if main.CONFIG.get('native_notifications', True):
             from java import jclass
             identity = str(message['sender']['id']) + ':' + str(message.get('client_id', message.get('id', '')))
-            jclass('com.weiyan.poetry.NotificationService').notifyMessage(message['conversation_id'], identity)
+            jclass('com.weiyan.poetry.MessageNotifications').notifyMessage(message['conversation_id'], identity)
     from java import jclass
-    service = jclass('com.weiyan.poetry.NotificationService')
+    service = jclass('com.weiyan.poetry.MessageNotifications')
     activity = jclass('com.weiyan.poetry.MainActivity')
     class AndroidBackgroundAgent(BackgroundAgent):
         def activate(self, context, bootstrap, persist=True):

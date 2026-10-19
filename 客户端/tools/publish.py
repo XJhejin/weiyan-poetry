@@ -122,7 +122,7 @@ def main():
     notes = (ROOT / 'RELEASE_NOTES.md').read_text('utf-8')
     notes_file.write_text(notes + '\n发布源码提交：' + commit + '\n', encoding='utf-8')
     run([gh, 'release', 'create', 'v' + config['VERSION'], '--repo', config['REPOSITORY'], '--target', commit,
-         '--title', '未言诗集 ' + config['VERSION'], '--notes-file', str(notes_file), '--latest',
+         '--title', 'HushLeaf · 未言诗集 ' + config['VERSION'], '--notes-file', str(notes_file), '--latest',
          *[str(file) for file in files]])
 
 

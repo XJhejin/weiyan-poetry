@@ -46,6 +46,8 @@ jobs:
         run: python 服务端/tests/test_linux_control.py
       - name: Test local control UI authentication and account-bound credentials
         run: python 服务器控制端/tests/test_control.py
+      - name: Test self-hosted download integrity gates
+        run: python 官网/tools/test_site.py
       - name: Build independent Windows programs
         run: python 客户端/tools/build.py
       - name: Build independent server controller

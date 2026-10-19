@@ -4,7 +4,7 @@ import http.client
 import json
 import threading
 import time
-from urllib.parse import urlsplit
+from transport_http import pool_for
 
 
 class NetworkStatus:
@@ -45,19 +45,16 @@ class NetworkStatus:
             self.busy = True
             self.last_started = time.monotonic()
         elapsed = None
-        parsed = urlsplit(target)
-        connection = (http.client.HTTPSConnection if parsed.scheme == 'https' else http.client.HTTPConnection)(parsed.hostname, parsed.port, timeout=4)
-        started = time.perf_counter()
         try:
-            connection.request('GET', '/api/health', headers={'X-Weiyan-Client': 'web'})
-            response = connection.getresponse()
-            raw = response.read(8193)
-            if response.status == 200 and len(raw) <= 8192 and json.loads(raw).get('ok') is True:
+            pool = pool_for(target)
+            started = time.perf_counter()
+            status, _, raw = pool.request('GET', '/api/health', headers={'X-Weiyan-Client': 'web'},
+                                         timeout=4, max_response_bytes=8192)
+            health = json.loads(raw)
+            if status == 200 and isinstance(health, dict) and health.get('ok') is True:
                 elapsed = (time.perf_counter() - started) * 1000
         except (OSError, ValueError, http.client.HTTPException):
             pass
-        finally:
-            connection.close()
         with self.lock:
             self.busy = False
             # A response from a previous address must not contaminate the new one.

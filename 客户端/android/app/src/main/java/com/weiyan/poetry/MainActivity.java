@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
         else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         if(Build.VERSION.SDK_INT>=28){WindowManager.LayoutParams attributes=getWindow().getAttributes();attributes.layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;getWindow().setAttributes(attributes);}
         TextView splash = new TextView(this);
-        splash.setText("未言诗集\n\n正在准备本机加密空间…");
+        splash.setText("HushLeaf\n\n正在准备本机加密空间…");
         splash.setTextColor(Color.rgb(158,105,129));splash.setTextSize(20);splash.setGravity(17);splash.setBackgroundColor(Color.rgb(255,248,250));
         setContentView(splash);
         worker.execute(() -> {
@@ -144,7 +144,6 @@ public class MainActivity extends Activity {
         });
         frame.requestApplyInsets();
         web.loadUrl(url);
-        NotificationService.startIfEnabled(this);
         backgroundAccess.request(false);
     }
 
@@ -212,7 +211,7 @@ public class MainActivity extends Activity {
         pendingApk=null;
     }
     public static void requestNotifications(){MainActivity activity=active;if(activity!=null&&Build.VERSION.SDK_INT>=33&&activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)activity.runOnUiThread(()->activity.requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},104));}
-    public static boolean batteryUnrestricted(){return NotificationService.batteryUnrestricted();}
+    public static boolean batteryUnrestricted(){return MessageNotifications.batteryUnrestricted();}
     public static void openBackgroundSettings(){
         MainActivity activity=active;
         if(activity==null)throw new IllegalStateException("请先打开客户端。");
@@ -220,8 +219,8 @@ public class MainActivity extends Activity {
     }
     public static void openApplicationSettings(){MainActivity activity=active;if(activity!=null)activity.runOnUiThread(()->activity.backgroundAccess.openApplicationSettings());}
     @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){super.onRequestPermissionsResult(request,permissions,results);backgroundAccess.onPermissionResult(request);}
-    @Override protected void onResume(){super.onResume();isForeground=true;NotificationService.clearUnread();NotificationService.refreshReception();if(web!=null)web.evaluateJavascript("window.dispatchEvent(new Event('weiyanAndroidResume'))",null);}
-    @Override protected void onPause(){super.onPause();isForeground=false;NotificationService.refreshReception();CookieManager.getInstance().flush();}
+    @Override protected void onResume(){super.onResume();isForeground=true;MessageNotifications.clearUnread();MessageNotifications.refreshReception();if(web!=null)web.evaluateJavascript("window.dispatchEvent(new Event('weiyanAndroidResume'))",null);}
+    @Override protected void onPause(){super.onPause();isForeground=false;MessageNotifications.refreshReception();CookieManager.getInstance().flush();}
     @Override public void onBackPressed(){if(web==null){super.onBackPressed();return;}web.evaluateJavascript("window.weiyanBack ? window.weiyanBack() : false",answer->{if(!"true".equals(answer))moveTaskToBack(true);});}
     @Override protected void onDestroy(){if(active==this)active=null;if(web!=null){web.stopLoading();web.destroy();}worker.shutdown();super.onDestroy();}
 }

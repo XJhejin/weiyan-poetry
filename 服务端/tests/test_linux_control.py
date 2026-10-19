@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -98,6 +99,34 @@ class PermissionsTests(unittest.TestCase):
 
 
 class ActivationTests(unittest.TestCase):
+    def test_old_systemd_can_launch_update_and_duplicate_request_does_not_spawn_again(self):
+        launches = []
+        def old_systemd(args, **kwargs):
+            if args[0] == 'systemd-run':
+                if any(arg.startswith('--property=UMask') for arg in args):
+                    raise subprocess.CalledProcessError(1, args, stderr='Unknown assignment UMask=0077')
+                launches.append(args)
+            return Mock(returncode=0)
+        with tempfile.TemporaryDirectory() as directory, patch.object(gateway, 'STORE', Path(directory)), \
+                patch.object(gateway, 'update_lock'), patch.object(gateway, 'run', side_effect=old_systemd), \
+                patch.object(gateway, 'admin_request') as admin:
+            self.assertTrue(gateway.start_update()['started'])
+            self.assertEqual(gateway.update_status()['stage'], 'queued')
+            self.assertTrue(gateway.start_update()['started'])
+            self.assertEqual(len(launches), 1)
+            admin.assert_not_called()
+
+    def test_launch_failure_returns_actionable_error_without_stopping_chat(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(gateway, 'STORE', Path(directory)), \
+                patch.object(gateway, 'update_lock'), \
+                patch.object(gateway, 'run', side_effect=OSError('systemd-run unavailable')) as command, \
+                patch.object(gateway, 'admin_request') as admin:
+            with self.assertRaisesRegex(ValueError, '无法启动远程更新任务'):
+                gateway.start_update()
+            self.assertEqual(gateway.update_status()['stage'], 'error')
+            self.assertEqual(command.call_count, 1)
+            admin.assert_not_called()
+
     def test_healthy_switch_and_failed_schema_migration_restore_database(self):
         for fail in (False, True):
             with self.subTest(fail=fail), tempfile.TemporaryDirectory() as directory:

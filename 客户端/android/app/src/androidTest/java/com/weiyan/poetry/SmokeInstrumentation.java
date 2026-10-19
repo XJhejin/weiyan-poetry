@@ -81,7 +81,6 @@ public class SmokeInstrumentation extends Instrumentation {
             if(foregroundRoot==null||!"com.weiyan.poetry".contentEquals(foregroundRoot.getPackageName()))throw new AssertionError("The phone app must be in foreground before the real pinch test");
             pinch(web);
             if(!"true".equals(js(web,"Math.abs(visualViewport.scale-1)<0.01 && document.querySelector('meta[name=viewport]').content.includes('user-scalable=no')")))throw new AssertionError("A real two-finger gesture zoomed the page");
-            if(!NotificationService.batteryUnrestricted())throw new AssertionError("Test device did not grant background battery access");
             if("true".equals(args.getString("verifyDefaultTls","false"))){
                 js(web,"fetch('/api/health').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(h=>{window.publicTlsOk=h.ok===true;}).catch(e=>{window.uiError='Public HTTPS: '+e.message;})");
                 waitJs(web,"window.publicTlsOk===true");
@@ -139,8 +138,6 @@ public class SmokeInstrumentation extends Instrumentation {
                 Thread.sleep(750);
                 Python.getInstance().getModule("builtins").callAttr("exec",
                     "from mobile import _gateway\n_gateway.background.activate(b, bob.call('/api/bootstrap'))\nb.active_sockets=1\na.send({'conversation_id':cid,'body':'notification-private-body-6628','client_id':'notify-'+secrets.token_hex(8)})",globals);
-                for(int i=0;i<40&&!NotificationService.receiverAwake();i++)Thread.sleep(100);
-                if(!NotificationService.receiverAwake())throw new AssertionError("Logged-in background receiver did not keep the CPU available");
                 android.app.NotificationManager manager=(android.app.NotificationManager)getTargetContext().getSystemService(android.content.Context.NOTIFICATION_SERVICE);
                 android.app.NotificationChannel channel=manager.getNotificationChannel("encrypted_messages_popup_v2");
                 if(channel==null||channel.getImportance()!=android.app.NotificationManager.IMPORTANCE_HIGH)throw new AssertionError("New message channel must allow heads-up banners");
@@ -154,26 +151,20 @@ public class SmokeInstrumentation extends Instrumentation {
                     if(!notified)Thread.sleep(250);
                 }
                 if(!notified)throw new AssertionError("No encrypted message notification while Activity was in background");
-                android.app.PendingIntent serviceOpen=null,messageOpen=null;
-                for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications()){
-                    if(n.getId()==1)serviceOpen=n.getNotification().contentIntent;
-                    if(n.getId()==2)messageOpen=n.getNotification().contentIntent;
-                }
-                if(serviceOpen==null||messageOpen==null||serviceOpen.equals(messageOpen))throw new AssertionError("Service notification must not overwrite the message conversation target");
-                for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==1){
-                    CharSequence text=n.getNotification().extras.getCharSequence(android.app.Notification.EXTRA_TEXT);
-                    if(text!=null&&text.toString().contains("加密消息服务正在运行"))throw new AssertionError("Legacy service text is still shown");
-                }
+                for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())
+                    if(n.getId()==1)throw new AssertionError("Removed ongoing receiver notification returned");
+                if(manager.getNotificationChannel("encrypted_receiver")!=null || manager.getNotificationChannel("encrypted_receiver_no_badge_v2")!=null)
+                    throw new AssertionError("Legacy receiver channels remain registered");
                 String nativeCid=globals.callAttr("__getitem__","cid").toString();
-                NotificationService.notifyMessage(nativeCid,"native-dedup-check");
+                MessageNotifications.notifyMessage(nativeCid,"native-dedup-check");
                 Thread.sleep(150);
                 int noticeCount=0;
                 for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2)noticeCount=n.getNotification().number;
                 if(noticeCount<2)throw new AssertionError("Consecutive incoming messages did not update notification count");
-                NotificationService.notifyMessage(nativeCid,"native-dedup-check");
+                MessageNotifications.notifyMessage(nativeCid,"native-dedup-check");
                 Thread.sleep(150);
                 for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2&&n.getNotification().number!=noticeCount)throw new AssertionError("Duplicate native notification changed unread count");
-                NotificationService.clearUnread();
+                MessageNotifications.clearUnread();
                 Python.getInstance().getModule("builtins").callAttr("exec",
                     "b.vault.put('ui','muted',['room:lobby'])\nmuted_sent=a.send({'conversation_id':'room:lobby','body':'muted-room-marker','client_id':'mute-'+secrets.token_hex(8)})",globals);
                 boolean receivedMuted=false;
@@ -188,50 +179,22 @@ public class SmokeInstrumentation extends Instrumentation {
                 boolean mentionNotified=false;
                 for(int i=0;i<60&&!mentionNotified;i++){for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2)mentionNotified=true;if(!mentionNotified)Thread.sleep(250);}
                 if(!mentionNotified)throw new AssertionError("Explicit mention did not bypass room mute in native background notifications");
-                NotificationService.clearUnread();
-                getTargetContext().startService(new Intent(getTargetContext(),NotificationService.class).setAction("stop"));
-                for(int i=0;i<40&&NotificationService.isRunning();i++)Thread.sleep(100);
-                if(NotificationService.isEnabled()||NotificationService.isRunning())throw new AssertionError("Explicit stop must disable background reception");
-                if(NotificationService.receiverAwake())throw new AssertionError("Explicit stop leaked the receiver wake lock");
-                new BackgroundReceiver().onReceive(getTargetContext(),new Intent(Intent.ACTION_MY_PACKAGE_REPLACED));
-                Thread.sleep(250);
-                if(NotificationService.isRunning())throw new AssertionError("Upgrade receiver ignored explicit stop preference");
+                MessageNotifications.clearUnread();
+                MessageNotifications.setEnabled(false);
+                if(MessageNotifications.isEnabled())throw new AssertionError("User could not disable background reception");
                 getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
                 Thread.sleep(750);
-                NotificationService.setEnabled(true);
-                for(int i=0;i<40&&!NotificationService.isRunning();i++)Thread.sleep(100);
-                if(!NotificationService.isEnabled()||!NotificationService.isRunning())throw new AssertionError("User could not resume background reception");
+                MessageNotifications.setEnabled(true);
+                for(int i=0;i<40&&!MessageNotifications.isRunning();i++)Thread.sleep(100);
+                if(!MessageNotifications.isEnabled()||!MessageNotifications.isRunning())throw new AssertionError("User could not resume background reception");
                 getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).putExtra("conversation_id","room:lobby").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
                 waitJs(web,"state.active==='room:lobby'");
-                for(int i=0;i<40&&NotificationService.receiverAwake();i++)Thread.sleep(100);
-                if(NotificationService.receiverAwake())throw new AssertionError("Foreground interface should release the receiver wake lock");
-                shell("dumpsys deviceidle whitelist -com.weiyan.poetry");
-                android.content.IntentFilter requestFilter=new android.content.IntentFilter(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);requestFilter.addDataScheme("package");
-                ActivityMonitor permissionMonitor=addMonitor(requestFilter,null,true);
-                runOnMainSync(MainActivity::openBackgroundSettings);
-                boolean clicked=false;
-                for(int i=0;i<30&&!clicked;i++){
-                    android.view.accessibility.AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();
-                    if(root!=null){for(android.view.accessibility.AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText("允许后台运行"))if(node.isClickable())clicked=node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);}
-                    if(!clicked)Thread.sleep(100);
-                }
-                for(int i=0;i<30&&permissionMonitor.getHits()==0;i++)Thread.sleep(100);
-                if(!clicked||permissionMonitor.getHits()!=1)throw new AssertionError("Background guide did not request the system battery exemption");
-                removeMonitor(permissionMonitor);
-                shell("dumpsys deviceidle whitelist +com.weiyan.poetry");
-                if(!NotificationService.batteryUnrestricted())throw new AssertionError("Background permission status did not refresh");
                 runOnMainSync(activity::finishAndRemoveTask);
                 for(int i=0;i<40&&!activity.isDestroyed();i++)Thread.sleep(100);
-                if(!activity.isDestroyed()||MainActivity.isForeground||!NotificationService.isRunning())throw new AssertionError("Closing the interface also stopped encrypted reception");
+                if(!activity.isDestroyed()||MainActivity.isForeground||!MessageNotifications.isRunning())throw new AssertionError("Closing the interface also stopped encrypted reception");
                 Python.getInstance().getModule("builtins").callAttr("exec","_gateway.background.activate(b, bob.call('/api/bootstrap'))",globals);
-                shell("input keyevent 223");shell("dumpsys battery unplug");
-                try {
-                    shell("dumpsys deviceidle enable");
-                    String forced=shell("dumpsys deviceidle force-idle deep");
-                    String idleState="";
-                    for(int i=0;i<40;i++){idleState=shell("dumpsys deviceidle get deep");if(idleState.contains("IDLE"))break;Thread.sleep(100);}
-                    if(!idleState.contains("IDLE"))throw new AssertionError("Device did not enter Doze: "+forced+" / "+idleState);
-                    NotificationService.clearUnread();
+
+                    MessageNotifications.clearUnread();
                     Python.getInstance().getModule("builtins").callAttr("exec",
                         "closed_id='closed-'+secrets.token_hex(8)\na.send({'conversation_id':cid,'body':'closed-private-body-4492','client_id':closed_id})",globals);
                     boolean receivedClosed=false,notifiedClosed=false;
@@ -243,8 +206,8 @@ public class SmokeInstrumentation extends Instrumentation {
                         }
                         if(!receivedClosed||!notifiedClosed)Thread.sleep(250);
                     }
-                    if(!receivedClosed||!notifiedClosed||!NotificationService.receiverAwake())throw new AssertionError("Closed interface failed to receive and notify during Doze");
-                } finally {shell("dumpsys deviceidle unforce");shell("dumpsys battery reset");shell("input keyevent 224");}
+                    if(!receivedClosed||!notifiedClosed)throw new AssertionError("Live process failed to receive with its interface closed");
+                for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==1)throw new AssertionError("Closing the interface created an ongoing notification");
             }
             result.putString("WeiyanSmoke","PASS");finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("WeiyanSmoke","FAIL: "+android.util.Log.getStackTraceString(e));finish(Activity.RESULT_CANCELED,result);}

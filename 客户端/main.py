@@ -167,7 +167,7 @@ class Gateway(BaseHTTPRequestHandler):
                 return self.json_response(NETWORK_STATUS.probe(CONFIG['server_url']))
             if path == '/desktop/background' and os.environ.get('WEIYAN_PLATFORM') == 'android':
                 from java import jclass
-                service, activity = jclass('com.weiyan.poetry.NotificationService'), jclass('com.weiyan.poetry.MainActivity')
+                service, activity = jclass('com.weiyan.poetry.MessageNotifications'), jclass('com.weiyan.poetry.MainActivity')
                 if self.command == 'POST':
                     data = self.read_json()
                     if data.get('action') == 'settings':
@@ -178,11 +178,9 @@ class Gateway(BaseHTTPRequestHandler):
                         service.openMessageSettings()
                     elif isinstance(data.get('enabled'), bool):
                         service.setEnabled(data['enabled'])
-                        if data['enabled'] and not service.batteryUnrestricted():
-                            activity.openBackgroundSettings()
                     else:
                         raise ValueError('后台接收设置格式无效。')
-                return self.json_response({'enabled': service.isEnabled(), 'running': service.isRunning(), 'battery_unrestricted': activity.batteryUnrestricted()})
+                return self.json_response({'enabled': service.isEnabled(), 'running': service.isRunning(), 'battery_unrestricted': activity.batteryUnrestricted(), 'mode': 'process-bound', 'push_configured': False, 'persistent_notification': False})
             if path == '/desktop/tray-settings' and self.command == 'POST':
                 self.read_json()
                 if sys.platform != 'win32' or getattr(self.server, 'browser_mode', False):
@@ -505,7 +503,7 @@ class Gateway(BaseHTTPRequestHandler):
             if os.environ.get('WEIYAN_PLATFORM') != 'android':
                 return False
             from java import jclass
-            return not jclass('com.weiyan.poetry.MainActivity').isForeground and not jclass('com.weiyan.poetry.NotificationService').isEnabled()
+            return not jclass('com.weiyan.poetry.MainActivity').isForeground and not jclass('com.weiyan.poetry.MessageNotifications').isEnabled()
         if receiver_paused():
             return self.json_response({'error': '后台接收已停止。'}, 503)
         context, _ = self.context()
@@ -694,7 +692,7 @@ def main():
     import webview
     webview.settings['ALLOW_DOWNLOADS'] = True
     icon = str(PUBLIC / "assets" / "logo.ico")
-    window = webview.create_window("未言诗集", url, width=1360, height=880, min_size=(900, 650),
+    window = webview.create_window("HushLeaf · 未言诗集", url, width=1360, height=880, min_size=(900, 650),
                                   background_color="#fff8fa", text_select=True)
     from tray import Tray
     from background import BackgroundAgent

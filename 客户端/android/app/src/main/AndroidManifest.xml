@@ -3,23 +3,12 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
-    <uses-permission android:name="android.permission.WAKE_LOCK"/>
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
-    <application android:label="未言诗集" android:icon="@drawable/logo" android:theme="@style/AppTheme"
+    <application android:label="HushLeaf" android:icon="@drawable/logo" android:theme="@style/AppTheme"
         android:allowBackup="false" android:fullBackupContent="false" android:usesCleartextTraffic="true"
         android:supportsRtl="true" android:largeHeap="true">
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
         <provider android:name=".UpdateProvider" android:authorities="com.weiyan.poetry.updates" android:exported="false" android:grantUriPermissions="true"/>
-        <receiver android:name=".BackgroundReceiver" android:exported="false">
-            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/><action android:name="android.intent.action.MY_PACKAGE_REPLACED"/></intent-filter>
-        </receiver>
-        <service android:name=".NotificationService" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="specialUse">
-            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-visible persistent connection to a user-configured end-to-end encrypted messaging server, receiving messages and notifying the user while the interface is closed."/>
-        </service>
     </application>
 </manifest>

@@ -8,7 +8,7 @@ import java.io.*;
 final class ClientRuntime {
     private static String url;
     static synchronized String start(Context context) throws IOException {
-        NotificationService.initialize(context);
+        MessageNotifications.initialize(context);
         if(url!=null)return url;
         File ui=new File(context.getNoBackupFilesDir(),"ui");copyAssets(context,"ui",ui);
         if(!Python.isStarted())Python.start(new AndroidPlatform(context.getApplicationContext()));

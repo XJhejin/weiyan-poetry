@@ -11,10 +11,62 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from transport_http import HTTPPool
+from network_status import NetworkStatus
 import main
 
 
 class TransportTests(unittest.TestCase):
+    def test_probes_reuse_chat_connection_and_reject_oversized_responses(self):
+        ports = []
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = 'HTTP/1.1'
+            def log_message(self, *args): pass
+            def do_GET(self):
+                ports.append(self.client_address[1])
+                payload = b'x' * 8193 if self.path == '/large' else b'{"ok":true}'
+                self.send_response(200);self.send_header('Content-Length', str(len(payload)))
+                self.end_headers();self.wfile.write(payload)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler);server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        target = 'http://127.0.0.1:' + str(server.server_port)
+        pool, status = HTTPPool(target), NetworkStatus()
+        try:
+            pool.request('GET', '/chat')
+            with patch('network_status.pool_for', return_value=pool):
+                self.assertIsNotNone(status.probe(target)['latency_ms'])
+                status.last_started = 0
+                self.assertEqual(status.probe(target)['samples'], 2)
+            self.assertEqual(len(set(ports)), 1, 'Health checks opened new TCP connections')
+            with self.assertRaises(ValueError): pool.request('GET', '/large', max_response_bytes=8192)
+            self.assertTrue(pool.idle.empty(), 'Unconsumed response returned to the connection pool')
+            self.assertEqual(pool.request('GET', '/chat')[0], 200)
+            self.assertNotEqual(ports[-1], ports[-2])
+        finally:
+            while not pool.idle.empty(): pool.idle.get_nowait()[0].close()
+            server.shutdown();server.server_close()
+
+    def test_probe_failures_and_address_changes_are_not_hidden(self):
+        pool, status = Mock(), NetworkStatus()
+        with patch('network_status.pool_for', return_value=pool):
+            for body in (b'{"ok":false}', b'[]', b'bad json'):
+                pool.request.return_value = (200, [], body)
+                status.last_started = 0
+                self.assertIsNone(status.probe('https://first.invalid')['latency_ms'])
+            pool.request.side_effect = OSError('offline')
+            status.last_started = 0
+            self.assertEqual(status.probe('https://first.invalid')['loss_rate'], 100)
+            def change_target(*args, **kwargs):
+                status.probe('https://second.invalid')
+                return 200, [], b'{"ok":true}'
+            pool.request.side_effect = change_target
+            status.last_started = 0
+            self.assertEqual(status.probe('https://first.invalid')['samples'], 0)
+            pool.request.side_effect = None
+            pool.request.return_value = (200, [], b'{"ok":true}')
+            value = status.probe('https://second.invalid')
+            self.assertEqual(value['samples'], 1)
+            self.assertEqual(value['loss_rate'], 0)
+
     def test_reuse_and_headers_do_not_mix_accounts(self):
         connections, cookies = [], []
         class Handler(BaseHTTPRequestHandler):

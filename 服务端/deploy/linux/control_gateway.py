@@ -168,11 +168,14 @@ def start_update():
         unit = 'weiyan-update-' + job
         progress('queued', '已开始远程更新，关闭控制端不会中断。', unit=unit)
         try:
-            run(['systemd-run', '--unit=' + unit, '--property=UMask=0077',
+            # systemd 219 does not accept UMask as a transient property. main()
+            # applies 0077 before opening files, including in the worker process.
+            run(['systemd-run', '--unit=' + unit,
                  str(BASE / 'control/venv/bin/python'), str(BASE / 'control/control_gateway.py'), '--worker', job])
-        except Exception:
-            progress('error', '无法启动远程更新任务，原服务保持运行。')
-            raise
+        except Exception as error:
+            message = '无法启动远程更新任务，原服务保持运行。'
+            progress('error', message)
+            raise ValueError(message) from error
         return {'started': True}
 
 

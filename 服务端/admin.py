@@ -244,7 +244,7 @@ def launch(core, args):
                 time.sleep(0.5)
         else:
             import webview
-            window = webview.create_window("未言诗集 · 服务端管理", url, width=1250, height=850, min_size=(1020, 700), background_color="#fff8fa", text_select=True)
+            window = webview.create_window("HushLeaf · 服务端管理", url, width=1250, height=850, min_size=(1020, 700), background_color="#fff8fa", text_select=True)
             from window_effects import WindowEffects
             effects = WindowEffects(window, close_window=True)
             import sys
