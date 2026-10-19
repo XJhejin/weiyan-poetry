@@ -158,12 +158,13 @@ public class SmokeInstrumentation extends Instrumentation {
                     CharSequence text=n.getNotification().extras.getCharSequence(android.app.Notification.EXTRA_TEXT);
                     if(text!=null&&text.toString().contains("加密消息服务正在运行"))throw new AssertionError("Legacy service text is still shown");
                 }
-                NotificationService.notifyMessage(cid,"native-dedup-check");
+                String nativeCid=globals.callAttr("__getitem__","cid").toString();
+                NotificationService.notifyMessage(nativeCid,"native-dedup-check");
                 Thread.sleep(150);
                 int noticeCount=0;
                 for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2)noticeCount=n.getNotification().number;
                 if(noticeCount<2)throw new AssertionError("Consecutive incoming messages did not update notification count");
-                NotificationService.notifyMessage(cid,"native-dedup-check");
+                NotificationService.notifyMessage(nativeCid,"native-dedup-check");
                 Thread.sleep(150);
                 for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==2&&n.getNotification().number!=noticeCount)throw new AssertionError("Duplicate native notification changed unread count");
                 NotificationService.clearUnread();
