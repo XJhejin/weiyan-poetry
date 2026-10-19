@@ -60,6 +60,7 @@ public class SmokeInstrumentation extends Instrumentation {
             for(int i=0;i<200&&web==null;i++){AtomicReference<WebView> found=new AtomicReference<>();runOnMainSync(()->found.set(find(activity.getWindow().getDecorView())));web=found.get();if(web==null)Thread.sleep(250);}
             if(web==null)throw new AssertionError("Native application failed to start");
             waitJs(web,"typeof state !== 'undefined' && typeof chooseAttachment==='function' && typeof openGroupInfo==='function' && typeof openFriendRequests==='function'");
+            waitJs(web,"document.querySelector('#boot').hidden && !document.querySelector('#auth').hidden");
             final WebView phoneWeb=web;
             AtomicReference<String> layoutError=new AtomicReference<>();
             runOnMainSync(()->{
