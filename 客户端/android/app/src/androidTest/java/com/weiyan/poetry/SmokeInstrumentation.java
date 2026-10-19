@@ -154,6 +154,12 @@ public class SmokeInstrumentation extends Instrumentation {
                     if(!notified)Thread.sleep(250);
                 }
                 if(!notified)throw new AssertionError("No encrypted message notification while Activity was in background");
+                android.app.PendingIntent serviceOpen=null,messageOpen=null;
+                for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications()){
+                    if(n.getId()==1)serviceOpen=n.getNotification().contentIntent;
+                    if(n.getId()==2)messageOpen=n.getNotification().contentIntent;
+                }
+                if(serviceOpen==null||messageOpen==null||serviceOpen.equals(messageOpen))throw new AssertionError("Service notification must not overwrite the message conversation target");
                 for(android.service.notification.StatusBarNotification n:manager.getActiveNotifications())if(n.getId()==1){
                     CharSequence text=n.getNotification().extras.getCharSequence(android.app.Notification.EXTRA_TEXT);
                     if(text!=null&&text.toString().contains("加密消息服务正在运行"))throw new AssertionError("Legacy service text is still shown");
