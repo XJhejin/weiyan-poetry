@@ -163,10 +163,14 @@ class Gateway(BaseHTTPRequestHandler):
                     data = self.read_json()
                     if data.get('action') == 'settings':
                         activity.openBackgroundSettings()
+                    elif data.get('action') == 'application-settings':
+                        activity.openApplicationSettings()
                     elif data.get('action') == 'notification-settings':
                         service.openMessageSettings()
                     elif isinstance(data.get('enabled'), bool):
                         service.setEnabled(data['enabled'])
+                        if data['enabled'] and not service.batteryUnrestricted():
+                            activity.openBackgroundSettings()
                     else:
                         raise ValueError('后台接收设置格式无效。')
                 return self.json_response({'enabled': service.isEnabled(), 'running': service.isRunning(), 'battery_unrestricted': activity.batteryUnrestricted()})

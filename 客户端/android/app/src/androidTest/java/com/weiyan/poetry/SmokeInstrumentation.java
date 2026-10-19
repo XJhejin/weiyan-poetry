@@ -6,6 +6,8 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.MotionEvent;
+import android.os.SystemClock;
 import android.webkit.WebView;
 import com.chaquo.python.Python;
 import com.chaquo.python.PyObject;
@@ -26,6 +28,29 @@ public class SmokeInstrumentation extends Instrumentation {
         return value.get();
     }
     private void waitJs(WebView web,String condition) throws Exception {for(int i=0;i<150;i++){if("true".equals(js(web,condition)))return;Thread.sleep(200);}throw new AssertionError("UI condition timed out: "+condition+"; error="+js(web,"window.uiError || ''")+"; state="+js(web,"document.body.innerText.slice(0,2000)"));}
+    private String shell(String command) throws Exception {
+        try(android.os.ParcelFileDescriptor descriptor=getUiAutomation().executeShellCommand(command);
+            InputStream input=new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)) {
+            return new String(input.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
+    private void pinch(WebView web) throws Exception {
+        int[] position=new int[2];runOnMainSync(()->web.getLocationOnScreen(position));
+        float cx=position[0]+web.getWidth()/2f,cy=position[1]+web.getHeight()/2f;
+        long down=SystemClock.uptimeMillis();
+        MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[2];
+        MotionEvent.PointerCoords[] points=new MotionEvent.PointerCoords[2];
+        for(int i=0;i<2;i++){properties[i]=new MotionEvent.PointerProperties();properties[i].id=i;properties[i].toolType=MotionEvent.TOOL_TYPE_FINGER;points[i]=new MotionEvent.PointerCoords();points[i].y=cy;points[i].pressure=1;points[i].size=1;}
+        points[0].x=cx-25;points[1].x=cx+25;
+        for(int step=0;step<15;step++){
+            int count=step==0||step==14?1:2;
+            int action=step==0?MotionEvent.ACTION_DOWN:step==1?MotionEvent.ACTION_POINTER_DOWN|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT):step==13?MotionEvent.ACTION_POINTER_UP|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT):step==14?MotionEvent.ACTION_UP:MotionEvent.ACTION_MOVE;
+            if(step>1&&step<13){points[0].x=cx-25-step*10;points[1].x=cx+25+step*10;}
+            MotionEvent event=MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,count,properties,points,0,0,1,1,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0);
+            sendPointerSync(event);event.recycle();Thread.sleep(25);
+        }
+        Thread.sleep(250);
+    }
     @Override public void onStart(){
         Bundle result=new Bundle();
         try {
@@ -50,6 +75,9 @@ public class SmokeInstrumentation extends Instrumentation {
                 if(position[1]+phoneWeb.getHeight()>screenBottom-safeBottom)layoutError.set("Composer viewport overlaps navigation bar");
             });
             if(layoutError.get()!=null)throw new AssertionError(layoutError.get());
+            pinch(web);
+            if(!"true".equals(js(web,"Math.abs(visualViewport.scale-1)<0.01 && document.querySelector('meta[name=viewport]').content.includes('user-scalable=no')")))throw new AssertionError("A real two-finger gesture zoomed the page");
+            if(!NotificationService.batteryUnrestricted())throw new AssertionError("Test device did not grant background battery access");
             if("true".equals(args.getString("verifyDefaultTls","false"))){
                 js(web,"fetch('/api/health').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(h=>{window.publicTlsOk=h.ok===true;}).catch(e=>{window.uiError='Public HTTPS: '+e.message;})");
                 waitJs(web,"window.publicTlsOk===true");
@@ -98,6 +126,8 @@ public class SmokeInstrumentation extends Instrumentation {
                 Thread.sleep(750);
                 Python.getInstance().getModule("builtins").callAttr("exec",
                     "from mobile import _gateway\n_gateway.background.activate(b, bob.call('/api/bootstrap'))\nb.active_sockets=1\na.send({'conversation_id':cid,'body':'notification-private-body-6628','client_id':'notify-'+secrets.token_hex(8)})",globals);
+                for(int i=0;i<40&&!NotificationService.receiverAwake();i++)Thread.sleep(100);
+                if(!NotificationService.receiverAwake())throw new AssertionError("Logged-in background receiver did not keep the CPU available");
                 android.app.NotificationManager manager=(android.app.NotificationManager)getTargetContext().getSystemService(android.content.Context.NOTIFICATION_SERVICE);
                 android.app.NotificationChannel channel=manager.getNotificationChannel("encrypted_messages_popup_v2");
                 if(channel==null||channel.getImportance()!=android.app.NotificationManager.IMPORTANCE_HIGH)throw new AssertionError("New message channel must allow heads-up banners");
@@ -124,6 +154,7 @@ public class SmokeInstrumentation extends Instrumentation {
                 getTargetContext().startService(new Intent(getTargetContext(),NotificationService.class).setAction("stop"));
                 for(int i=0;i<40&&NotificationService.isRunning();i++)Thread.sleep(100);
                 if(NotificationService.isEnabled()||NotificationService.isRunning())throw new AssertionError("Explicit stop must disable background reception");
+                if(NotificationService.receiverAwake())throw new AssertionError("Explicit stop leaked the receiver wake lock");
                 new BackgroundReceiver().onReceive(getTargetContext(),new Intent(Intent.ACTION_MY_PACKAGE_REPLACED));
                 Thread.sleep(250);
                 if(NotificationService.isRunning())throw new AssertionError("Upgrade receiver ignored explicit stop preference");
@@ -134,6 +165,45 @@ public class SmokeInstrumentation extends Instrumentation {
                 if(!NotificationService.isEnabled()||!NotificationService.isRunning())throw new AssertionError("User could not resume background reception");
                 getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).putExtra("conversation_id","room:lobby").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
                 waitJs(web,"state.active==='room:lobby'");
+                for(int i=0;i<40&&NotificationService.receiverAwake();i++)Thread.sleep(100);
+                if(NotificationService.receiverAwake())throw new AssertionError("Foreground interface should release the receiver wake lock");
+                shell("dumpsys deviceidle whitelist -com.weiyan.poetry");
+                android.content.IntentFilter requestFilter=new android.content.IntentFilter(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);requestFilter.addDataScheme("package");
+                ActivityMonitor permissionMonitor=addMonitor(requestFilter,null,true);
+                runOnMainSync(MainActivity::openBackgroundSettings);
+                boolean clicked=false;
+                for(int i=0;i<30&&!clicked;i++){
+                    android.view.accessibility.AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();
+                    if(root!=null){for(android.view.accessibility.AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText("允许后台运行"))if(node.isClickable())clicked=node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);}
+                    if(!clicked)Thread.sleep(100);
+                }
+                for(int i=0;i<30&&permissionMonitor.getHits()==0;i++)Thread.sleep(100);
+                if(!clicked||permissionMonitor.getHits()!=1)throw new AssertionError("Background guide did not request the system battery exemption");
+                removeMonitor(permissionMonitor);
+                shell("dumpsys deviceidle whitelist +com.weiyan.poetry");
+                if(!NotificationService.batteryUnrestricted())throw new AssertionError("Background permission status did not refresh");
+                runOnMainSync(activity::finishAndRemoveTask);
+                for(int i=0;i<40&&!activity.isDestroyed();i++)Thread.sleep(100);
+                if(!activity.isDestroyed()||MainActivity.isForeground||!NotificationService.isRunning())throw new AssertionError("Closing the interface also stopped encrypted reception");
+                Python.getInstance().getModule("builtins").callAttr("exec","_gateway.background.activate(b, bob.call('/api/bootstrap'))",globals);
+                shell("input keyevent 223");shell("dumpsys battery unplug");
+                try {
+                    shell("dumpsys deviceidle force-idle");
+                    if(!shell("dumpsys deviceidle get deep").contains("IDLE"))throw new AssertionError("Device did not enter Doze");
+                    NotificationService.clearUnread();
+                    Python.getInstance().getModule("builtins").callAttr("exec",
+                        "closed_id='closed-'+secrets.token_hex(8)\na.send({'conversation_id':cid,'body':'closed-private-body-4492','client_id':closed_id})",globals);
+                    boolean receivedClosed=false,notifiedClosed=false;
+                    for(int i=0;i<80&&(!receivedClosed||!notifiedClosed);i++){
+                        receivedClosed=Python.getInstance().getModule("builtins").callAttr("eval","any(m['client_id']==closed_id for m in b.vault.messages(cid))",globals).toBoolean();
+                        for(android.service.notification.StatusBarNotification notification:manager.getActiveNotifications())if(notification.getId()==2){
+                            if(notification.getNotification().extras.toString().contains("closed-private-body"))throw new AssertionError("Closed-interface notification revealed plaintext");
+                            notifiedClosed=true;
+                        }
+                        if(!receivedClosed||!notifiedClosed)Thread.sleep(250);
+                    }
+                    if(!receivedClosed||!notifiedClosed||!NotificationService.receiverAwake())throw new AssertionError("Closed interface failed to receive and notify during Doze");
+                } finally {shell("dumpsys deviceidle unforce");shell("dumpsys battery reset");shell("input keyevent 224");}
             }
             result.putString("WeiyanSmoke","PASS");finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("WeiyanSmoke","FAIL: "+android.util.Log.getStackTraceString(e));finish(Activity.RESULT_CANCELED,result);}

@@ -42,11 +42,13 @@ public class MainActivity extends Activity {
     private String pendingApk;
     private static MainActivity active;
     public static volatile boolean isForeground;
+    private BackgroundAccess backgroundAccess;
     private final java.util.concurrent.ExecutorService worker = Executors.newSingleThreadExecutor();
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
         active = this;
+        backgroundAccess = new BackgroundAccess(this);
         getWindow().setStatusBarColor(Color.rgb(255,248,250));
         getWindow().setNavigationBarColor(Color.rgb(255,248,250));
         if(Build.VERSION.SDK_INT>=30)getWindow().setDecorFitsSystemWindows(false);
@@ -76,7 +78,7 @@ public class MainActivity extends Activity {
 
     private void showClient(String url) {
         baseUrl = Uri.parse(url).buildUpon().path("").clearQuery().build().toString();
-        web = new WebView(this);
+        web = new FixedScaleWebView(this);
         web.setBackgroundColor(Color.rgb(255,248,250));
         WebSettings settings = web.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -143,7 +145,7 @@ public class MainActivity extends Activity {
         frame.requestApplyInsets();
         web.loadUrl(url);
         NotificationService.startIfEnabled(this);
-        requestNotifications();
+        backgroundAccess.request(false);
     }
 
     private boolean isLocal(String url) {
@@ -210,17 +212,16 @@ public class MainActivity extends Activity {
         pendingApk=null;
     }
     public static void requestNotifications(){MainActivity activity=active;if(activity!=null&&Build.VERSION.SDK_INT>=33&&activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)activity.runOnUiThread(()->activity.requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},104));}
-    public static boolean batteryUnrestricted(){MainActivity activity=active;return activity!=null&&((android.os.PowerManager)activity.getSystemService(POWER_SERVICE)).isIgnoringBatteryOptimizations(activity.getPackageName());}
+    public static boolean batteryUnrestricted(){return NotificationService.batteryUnrestricted();}
     public static void openBackgroundSettings(){
         MainActivity activity=active;
         if(activity==null)throw new IllegalStateException("请先打开客户端。");
-        activity.runOnUiThread(()->{
-            try{activity.startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+activity.getPackageName())));}
-            catch(RuntimeException error){Toast.makeText(activity,"请在系统设置中打开未言诗集的电池与后台运行设置。",Toast.LENGTH_LONG).show();}
-        });
+        activity.runOnUiThread(()->activity.backgroundAccess.request(true));
     }
-    @Override protected void onResume(){super.onResume();isForeground=true;NotificationService.clearUnread();}
-    @Override protected void onPause(){super.onPause();isForeground=false;CookieManager.getInstance().flush();}
+    public static void openApplicationSettings(){MainActivity activity=active;if(activity!=null)activity.runOnUiThread(()->activity.backgroundAccess.openApplicationSettings());}
+    @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){super.onRequestPermissionsResult(request,permissions,results);backgroundAccess.onPermissionResult(request);}
+    @Override protected void onResume(){super.onResume();isForeground=true;NotificationService.clearUnread();NotificationService.refreshReception();if(web!=null)web.evaluateJavascript("window.dispatchEvent(new Event('weiyanAndroidResume'))",null);}
+    @Override protected void onPause(){super.onPause();isForeground=false;NotificationService.refreshReception();CookieManager.getInstance().flush();}
     @Override public void onBackPressed(){if(web==null){super.onBackPressed();return;}web.evaluateJavascript("window.weiyanBack ? window.weiyanBack() : false",answer->{if(!"true".equals(answer))moveTaskToBack(true);});}
     @Override protected void onDestroy(){if(active==this)active=null;if(web!=null){web.stopLoading();web.destroy();}worker.shutdown();super.onDestroy();}
 }

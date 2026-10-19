@@ -52,6 +52,7 @@ jobs:
             adb install 客户端/android/app/build/outputs/apk/debug/app-debug.apk
             adb install 客户端/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             adb shell pm grant com.weiyan.poetry android.permission.POST_NOTIFICATIONS
+            adb shell dumpsys deviceidle whitelist +com.weiyan.poetry
             adb shell am instrument -w -e server http://10.0.2.2:23180 -e verifyDefaultTls "${{ inputs.verify_default_tls || 'false' }}" com.weiyan.poetry.test/com.weiyan.poetry.SmokeInstrumentation | tee android-smoke.txt
             adb logcat -d > android-logcat.txt
             grep -q 'WeiyanSmoke=PASS' android-smoke.txt

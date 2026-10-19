@@ -60,7 +60,16 @@ def start(profile, ui):
     from java import jclass
     service = jclass('com.weiyan.poetry.NotificationService')
     activity = jclass('com.weiyan.poetry.MainActivity')
-    _gateway.background = BackgroundAgent(_gateway, main.PROFILE, lambda: main.CONFIG['server_url'], notify,
+    class AndroidBackgroundAgent(BackgroundAgent):
+        def activate(self, context, bootstrap, persist=True):
+            super().activate(context, bootstrap, persist)
+            service.setSessionActive(True)
+
+        def clear(self):
+            super().clear()
+            service.setSessionActive(False)
+
+    _gateway.background = AndroidBackgroundAgent(_gateway, main.PROFILE, lambda: main.CONFIG['server_url'], notify,
         enabled=lambda: service.isEnabled(), poll_with_socket=lambda: not activity.isForeground)
     _gateway.background.start()
     threading.Thread(target=_gateway.serve_forever, daemon=True).start()

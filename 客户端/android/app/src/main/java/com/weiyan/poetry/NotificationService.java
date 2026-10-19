@@ -8,11 +8,26 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.PowerManager;
 
 /** Visible foreground service keeps the encrypted receiver active without the WebView. */
 public class NotificationService extends Service {
     private static volatile NotificationService active;
     private static Context application;
+    private static volatile boolean sessionActive;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private PowerManager.WakeLock receiverLock;
+    private final Runnable keepReceiving = new Runnable() {
+        @Override public void run() {
+            if (active != NotificationService.this) return;
+            boolean needed = isEnabled() && sessionActive && !MainActivity.isForeground;
+            if (needed) receiverLock.acquire(10 * 60 * 1000L);
+            else if (receiverLock.isHeld()) receiverLock.release();
+            handler.postDelayed(this, 60 * 1000L);
+        }
+    };
     private int unread;
     private NotificationManager manager;
     private static final String RUNNING="encrypted_receiver",LEGACY_MESSAGES="encrypted_messages",MESSAGES="encrypted_messages_popup_v2";
@@ -20,6 +35,10 @@ public class NotificationService extends Service {
     private static SharedPreferences preferences(){return application.getSharedPreferences("background-reception",Context.MODE_PRIVATE);}
     public static boolean isEnabled(){return application!=null&&preferences().getBoolean("enabled",true);}
     public static boolean isRunning(){return active!=null;}
+    public static boolean batteryUnrestricted(){return application!=null&&BackgroundAccess.batteryUnrestricted(application);}
+    public static boolean receiverAwake(){NotificationService service=active;return service!=null&&service.receiverLock!=null&&service.receiverLock.isHeld();}
+    public static void setSessionActive(boolean value){sessionActive=value;refreshReception();}
+    public static void refreshReception(){NotificationService service=active;if(service!=null)service.handler.post(()->{service.handler.removeCallbacks(service.keepReceiving);service.keepReceiving.run();});}
     static void startIfEnabled(Context context){
         initialize(context);
         if(!isEnabled())return;
@@ -29,11 +48,14 @@ public class NotificationService extends Service {
     public static void setEnabled(boolean enabled){
         if(application==null)throw new IllegalStateException("客户端尚未启动。");
         preferences().edit().putBoolean("enabled",enabled).commit();
-        try{if(enabled)startIfEnabled(application);else application.stopService(new Intent(application,NotificationService.class));}
+        try{if(enabled)startIfEnabled(application);else{clearUnread();application.stopService(new Intent(application,NotificationService.class));}}
         catch(RuntimeException error){preferences().edit().putBoolean("enabled",false).commit();throw error;}
     }
     @Override public void onCreate(){
         super.onCreate();initialize(this);active=this;manager=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+        receiverLock=((PowerManager)getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,getPackageName()+":encrypted-receiver");
+        receiverLock.setReferenceCounted(false);
+        unread=preferences().getInt("unread",0);
         if(Build.VERSION.SDK_INT>=26){
             NotificationChannel running=new NotificationChannel(RUNNING,"后台消息接收",NotificationManager.IMPORTANCE_LOW);running.setDescription("维持与自建服务端的加密消息连接");running.setShowBadge(false);manager.createNotificationChannel(running);
             if(manager.getNotificationChannel(MESSAGES)==null){
@@ -47,6 +69,7 @@ public class NotificationService extends Service {
             }
         }
         startForeground(1,running());
+        refreshReception();
         new Thread(()->{try{ClientRuntime.start(getApplicationContext());}catch(Exception e){stopSelf();}},"encrypted-receiver-start").start();
     }
     private PendingIntent open(String cid){return PendingIntent.getActivity(this,0,new Intent(this,MainActivity.class).putExtra("conversation_id",cid).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);}
@@ -60,19 +83,22 @@ public class NotificationService extends Service {
         if(service==null||!isEnabled()||MainActivity.isForeground)return;
         if(Build.VERSION.SDK_INT>=33&&service.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)return;
         service.unread++;
+        preferences().edit().putInt("unread",service.unread).apply();
         Notification notification=service.builder(MESSAGES).setSmallIcon(R.drawable.logo).setContentTitle("未言诗集 · "+service.unread+" 条新消息")
             .setContentText("收到新的加密消息，打开客户端查看。").setContentIntent(service.open(cid)).setAutoCancel(true)
             .setVisibility(Notification.VISIBILITY_PRIVATE).setCategory(Notification.CATEGORY_MESSAGE).setPriority(Notification.PRIORITY_HIGH)
             .setDefaults(Notification.DEFAULT_ALL).setNumber(service.unread).build();
         service.manager.notify(2,notification);
     }
-    public static void clearUnread(){NotificationService service=active;if(service!=null){service.unread=0;service.manager.cancel(2);}}
+    public static void clearUnread(){NotificationService service=active;if(application!=null)preferences().edit().putInt("unread",0).apply();if(service!=null){service.unread=0;service.manager.cancel(2);}}
     public static void openMessageSettings(){if(application==null)return;Intent intent=Build.VERSION.SDK_INT>=26?new Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,application.getPackageName()).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID,MESSAGES):new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:"+application.getPackageName()));application.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent!=null&&"stop".equals(intent.getAction()))preferences().edit().putBoolean("enabled",false).commit();
         if(!isEnabled()){clearUnread();stopForeground(true);stopSelf();return START_NOT_STICKY;}
+        refreshReception();
         return START_STICKY;
     }
+    @Override public void onTaskRemoved(Intent rootIntent){super.onTaskRemoved(rootIntent);refreshReception();}
     @Override public IBinder onBind(Intent intent){return null;}
-    @Override public void onDestroy(){clearUnread();if(active==this)active=null;super.onDestroy();}
+    @Override public void onDestroy(){handler.removeCallbacksAndMessages(null);if(receiverLock!=null&&receiverLock.isHeld())receiverLock.release();if(active==this)active=null;super.onDestroy();}
 }
