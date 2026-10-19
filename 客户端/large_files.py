@@ -295,7 +295,7 @@ class FileTransfers:
                 self.wake.clear()
                 if os.environ.get('WEIYAN_PLATFORM') == 'android':
                     from java import jclass
-                    if not jclass('com.weiyan.poetry.NotificationService').isEnabled() and not jclass('com.weiyan.poetry.MainActivity').isForeground:
+                    if not jclass('com.weiyan.poetry.MessageNotifications').isEnabled() and not jclass('com.weiyan.poetry.MainActivity').isForeground:
                         self.wake.wait(2)
                         continue
                 with context.vault.db() as db:
@@ -313,7 +313,7 @@ class FileTransfers:
                                 if self.stopped.is_set(): return
                                 if os.environ.get('WEIYAN_PLATFORM') == 'android':
                                     from java import jclass
-                                    if not jclass('com.weiyan.poetry.NotificationService').isEnabled() and not jclass('com.weiyan.poetry.MainActivity').isForeground:
+                                    if not jclass('com.weiyan.poetry.MessageNotifications').isEnabled() and not jclass('com.weiyan.poetry.MainActivity').isForeground:
                                         raise OSError('后台接收已停止。')
                                 path = context.vault.files.part_path(file, index)
                                 if path.exists() and path.stat().st_size <= CHUNK_SIZE + OVERHEAD:

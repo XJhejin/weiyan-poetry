@@ -1,19 +1,21 @@
 """Attachment bounds, authentication and bounded reads, without allocating 10 GiB."""
 import base64
 import copy
+import os
 from pathlib import Path
 import secrets
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from nacl.exceptions import CryptoError
 from nacl.secret import SecretBox
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import secure
-from large_files import CHUNK_SIZE, MAX_SIZE, checked_file
+from large_files import CHUNK_SIZE, MAX_SIZE, FileTransfers, checked_file
 
 
 class AttachmentStorageTests(unittest.TestCase):
@@ -89,6 +91,40 @@ class AttachmentStorageTests(unittest.TestCase):
         secure.SecureClient.check_blob_references({'blobs': ['e'*32]}, clear)
         for declared in ([], ['a'*32], ['e'*32]*2, [{}]):
             with self.assertRaises(ValueError): secure.SecureClient.check_blob_references({'blobs': declared}, clear)
+
+    def test_android_attachment_reception_and_user_background_choice(self):
+        for enabled, foreground in ((True, False), (False, True), (False, False)):
+            with self.subTest(enabled=enabled, foreground=foreground):
+                asset = self.files.begin({'name': 'android.bin', 'size': 3, 'kind': 'file'})['id']
+                self.files.put(asset, 0, b'abc')
+                file = self.vault.get('file', asset)
+                file['blob']['transfer'] = secrets.token_hex(16)
+                self.vault.put('file', asset, file)
+                part = self.files.part_path(file, 0)
+                cipher = part.read_bytes()
+                part.unlink()
+                self.vault.put('file_pending', '42', {'assets': [asset]})
+                context = SimpleNamespace(vault=self.vault, device_id='android-test',
+                                          remote=Mock(), remote_binary=Mock(return_value=cipher))
+                worker = FileTransfers(context)
+                classes = {
+                    'com.weiyan.poetry.MessageNotifications': SimpleNamespace(isEnabled=lambda: enabled),
+                    'com.weiyan.poetry.MainActivity': SimpleNamespace(isForeground=foreground),
+                }
+                with patch.dict(os.environ, WEIYAN_PLATFORM='android'), \
+                     patch.dict(sys.modules, java=SimpleNamespace(jclass=classes.__getitem__)), \
+                     patch.object(worker.wake, 'wait', side_effect=lambda timeout: worker.stopped.set()):
+                    worker.run()
+                if enabled or foreground:
+                    self.assertTrue(self.files.status(asset)['ready'])
+                    self.assertEqual(b''.join(self.files.read_range(file, 0, 2)), b'abc')
+                    context.remote_binary.assert_called_once()
+                    context.remote.assert_called_once_with('/api/received', {'device_id': 'android-test', 'id': 42})
+                    self.assertIsNone(self.vault.get('file_pending', '42'))
+                else:
+                    context.remote_binary.assert_not_called()
+                    context.remote.assert_not_called()
+                    self.assertIsNotNone(self.vault.get('file_pending', '42'))
 
 
 if __name__ == '__main__': unittest.main(verbosity=2)
