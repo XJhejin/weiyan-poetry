@@ -1,4 +1,17 @@
 'use strict';
+if(!window.weiyanOpenNotification){
+  let pendingConversation='';
+  window.weiyanOpenNotification=async cid=>{
+    if(typeof cid!=='string'||!cid||cid.length>128)return;
+    pendingConversation=cid;
+    if(!state.me)return;
+    pendingConversation='';state.view='messages';
+    if($('#modal').open)await closeModal();
+    try{await selectConversation(cid);}catch(error){toast(error.message);}
+  };
+  const beforeNotificationBootstrap=bootstrap;
+  bootstrap=async function(options){await beforeNotificationBootstrap(options);if(pendingConversation&&state.me)await window.weiyanOpenNotification(pendingConversation);};
+}
 const originalOpenSettings=openSettings;
 openSettings=function(){
   originalOpenSettings();

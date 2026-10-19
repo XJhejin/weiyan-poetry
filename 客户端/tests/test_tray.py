@@ -10,7 +10,7 @@ import tray
 
 class TrayTests(unittest.TestCase):
     def make_tray(self):
-        with patch.object(tray.pystray, 'Icon'), patch.object(tray, 'WindowEffects'):
+        with patch.object(tray, 'MessageIcon'), patch.object(tray, 'WindowEffects'):
             item = tray.Tray(MagicMock(), Path(tray.__file__).parent / 'ui/assets/logo.png',
                              {'native_notifications': True}, MagicMock())
         item.foreground = lambda: False
@@ -34,6 +34,25 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(item.unread, 0)
         self.assertIs(item.icon.icon, item.image)
         self.assertEqual(item.icon.title, '未言诗集')
+
+    def test_notification_click_opens_latest_conversation_and_clears_balloon(self):
+        import threading
+        item = self.make_tray()
+        opened = threading.Event()
+        item.window.evaluate_js.side_effect = lambda code: opened.set()
+        item.notify({'conversation_id': 'group:recent', 'body': '消息', 'sender': {'nickname': '联系人'}})
+        item.show()
+        self.assertTrue(opened.wait(2))
+        self.assertIn('group:recent', item.window.evaluate_js.call_args[0][0])
+        self.assertIsNone(item.latest_conversation)
+        item.icon.remove_notification.assert_called()
+
+    def test_windows_balloon_click_dispatches_default_open_action(self):
+        class Callback:
+            def __call__(self): self.called = True
+        icon = Callback()
+        tray.MessageIcon._on_notify(icon, 0, 0x405)
+        self.assertTrue(icon.called)
 
     def test_foreground_and_open_clear_preview_and_stop_blinking(self):
         item = self.make_tray()

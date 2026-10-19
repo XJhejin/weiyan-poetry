@@ -1,11 +1,21 @@
 """Windows tray lifecycle and privacy-preserving native balloon notifications."""
 import ctypes
+import json
 import os
 import threading
 import time
 from PIL import Image
 import pystray
 from window_effects import WindowEffects
+
+
+class MessageIcon(pystray.Icon):
+    """pystray 0.19.5 does not dispatch Windows balloon clicks itself."""
+    def _on_notify(self, wparam, lparam):
+        if lparam == 0x405:  # NIN_BALLOONUSERCLICK (WM_USER + 5)
+            self()
+        else:
+            return super()._on_notify(wparam, lparam)
 
 
 class Tray:
@@ -21,7 +31,8 @@ class Tray:
         self.blank = Image.new('RGBA', self.image.size, (0, 0, 0, 0))
         self.bright = True
         self.last_alert = None
-        self.icon = pystray.Icon('WeiyanPoetry', self.image, '未言诗集', menu=pystray.Menu(
+        self.latest_conversation = None
+        self.icon = MessageIcon('WeiyanPoetry', self.image, '未言诗集', menu=pystray.Menu(
             pystray.MenuItem('打开未言诗集', self.show, default=True),
             pystray.MenuItem('新消息提醒', self.toggle, checked=lambda item: self.config.get('native_notifications', True)),
             pystray.Menu.SEPARATOR, pystray.MenuItem('退出未言诗集', self.exit)))
@@ -40,8 +51,17 @@ class Tray:
 
     def show(self, *args):
         self.hidden = False
+        with self.lock:
+            conversation = self.latest_conversation if self.unread else None
         self.clear_unread()
         self.effects.show()
+        if conversation:
+            def open_message():
+                try:
+                    self.window.evaluate_js('window.weiyanOpenNotification && window.weiyanOpenNotification(' + json.dumps(conversation) + ')')
+                except Exception:
+                    pass  # Opening the window must still work during UI startup.
+            threading.Thread(target=open_message, daemon=True, name='open-notified-conversation').start()
 
     def foreground(self):
         foreground = ctypes.windll.user32.GetForegroundWindow()
@@ -55,6 +75,9 @@ class Tray:
             self.bright = True
             self.icon.icon = self.image
             self.icon.title = '未言诗集'
+            self.latest_conversation = None
+            self.last_alert = None
+            self.icon.remove_notification()
 
     def pulse(self):
         while not self.stopped.wait(.6):
@@ -78,6 +101,7 @@ class Tray:
             return
         with self.lock:
             self.unread += 1
+            self.latest_conversation = message.get('conversation_id')
             self.bright = True
             self.icon.icon = self.image
             preview = message.get('body', '').strip()
