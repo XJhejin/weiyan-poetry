@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
         else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         if(Build.VERSION.SDK_INT>=28){WindowManager.LayoutParams attributes=getWindow().getAttributes();attributes.layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;getWindow().setAttributes(attributes);}
         TextView splash = new TextView(this);
-        splash.setText("HushLeaf\n\n正在准备本机加密空间…");
+        splash.setText("未言诗集 · HushLeaf\n\n正在准备本机加密空间…");
         splash.setTextColor(Color.rgb(158,105,129));splash.setTextSize(20);splash.setGravity(17);splash.setBackgroundColor(Color.rgb(255,248,250));
         setContentView(splash);
         worker.execute(() -> {

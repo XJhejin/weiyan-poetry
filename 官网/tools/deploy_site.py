@@ -47,10 +47,13 @@ def download(url, target, expected=None):
 
 def site_block():
     return '''# BEGIN HushLeaf website
-http://www.hushleaf.top {
-    redir https://www.hushleaf.top{uri} 308
-}
 https://www.hushleaf.top {
+    tls {
+        issuer acme {
+            dir https://acme-v02.api.letsencrypt.org/directory
+            disable_http_challenge
+        }
+    }
     root * /opt/weiyan/website/current
     encode zstd gzip
     header {
@@ -108,6 +111,11 @@ def deploy(expected_version):
         # Validate using the same non-secret public address the installed service uses.
         env = os.environ.copy();env['WEIYAN_PUBLIC_IP'] = '156.225.28.175'
         subprocess.run([CADDY, 'validate', '--config', str(trial), '--adapter', 'caddyfile'], env=env, check=True)
+        # The installed proxy runs as an unprivileged account. Check that it can
+        # read the candidate before replacing a working configuration.
+        run('runuser', '-u', 'weiyan-proxy', '--', 'env',
+            'HOME=/var/lib/weiyan-proxy', 'WEIYAN_PUBLIC_IP=156.225.28.175',
+            CADDY, 'validate', '--config', str(trial), '--adapter', 'caddyfile')
         firewall = subprocess.run(['systemctl', 'is-active', 'firewalld'], capture_output=True).returncode == 0
         if firewall:
             run('firewall-cmd', '--add-port=443/tcp')
@@ -132,6 +140,10 @@ def deploy(expected_version):
                 if not json.loads(response.read(8192)).get('ok'):
                     raise ValueError('Existing chat endpoint failed verification')
         except Exception:
+            diagnostic = subprocess.run(['journalctl', '-u', 'weiyan-proxy.service',
+                                         '-n', '30', '--no-pager', '-o', 'cat'],
+                                        capture_output=True, text=True)
+            print(diagnostic.stdout, flush=True)
             CONFIG.write_bytes(old_config)
             if previous:
                 pending.symlink_to(previous, target_is_directory=True);os.replace(pending, current)

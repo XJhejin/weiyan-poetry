@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: python -m pip install -r 客户端/requirements.txt -r 客户端/tools/requirements.txt
+        run: python -m pip install -r 客户端/requirements.txt -r 客户端/tools/requirements.txt -r 服务器控制端/requirements.txt
       - name: Test chat, encryption and offline history
         run: python 服务端/tests/test_chat.py
       - name: Test large encrypted file bounds and bounded memory reads
@@ -45,13 +45,19 @@ jobs:
       - name: Test remote control permissions and Linux update rollback
         run: python 服务端/tests/test_linux_control.py
       - name: Test local control UI authentication and account-bound credentials
-        run: python 服务器控制端/tests/test_control.py
+        run: |
+          python 服务器控制端/tests/test_control.py
+          python 服务器控制端/tests/test_password.py
       - name: Test self-hosted download integrity gates
         run: python 官网/tools/test_site.py
       - name: Build independent Windows programs
         run: python 客户端/tools/build.py
       - name: Build independent server controller
         run: python 服务器控制端/tools/build.py
+      - name: Test frozen controller password authentication against isolated SSH server
+        env:
+          WEIYAN_TEST_BINARIES: '1'
+        run: python 服务器控制端/tests/test_password.py
       - name: Test actual executables
         env:
           WEIYAN_TEST_BINARIES: '1'

@@ -692,7 +692,7 @@ def main():
     import webview
     webview.settings['ALLOW_DOWNLOADS'] = True
     icon = str(PUBLIC / "assets" / "logo.ico")
-    window = webview.create_window("HushLeaf · 未言诗集", url, width=1360, height=880, min_size=(900, 650),
+    window = webview.create_window("未言诗集 · HushLeaf", url, width=1360, height=880, min_size=(900, 650),
                                   background_color="#fff8fa", text_select=True)
     from tray import Tray
     from background import BackgroundAgent

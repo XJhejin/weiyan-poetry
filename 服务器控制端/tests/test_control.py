@@ -109,6 +109,7 @@ class ConnectionTests(unittest.TestCase):
             identity = Path(directory)
             settings = {'host': '156.225.28.175', 'port': 22, 'user': 'root'}
             response = Mock(returncode=0, stdout=b'{"ok":true,"data":{"running":true}}', stderr=b'')
+            (identity / 'connection.json').write_text(json.dumps(settings), 'utf-8')
             with patch.object(remote, 'identity', return_value=(settings, identity)), \
                     patch('connection.subprocess.run', return_value=response) as process, \
                     patch('connection.Path.is_file', return_value=True):

@@ -77,7 +77,7 @@ public final class MessageNotifications {
         if(alert)lastAlert=now;
         unread++;preferences().edit().putInt("unread",unread).apply();
         Notification.Builder builder=Build.VERSION.SDK_INT>=26?new Notification.Builder(application,MESSAGES):new Notification.Builder(application);
-        Notification notice=builder.setSmallIcon(R.drawable.logo).setContentTitle("HushLeaf · "+unread+" 条新消息")
+        Notification notice=builder.setSmallIcon(R.drawable.logo).setContentTitle("未言诗集 · "+unread+" 条新消息")
             .setContentText("收到新的加密消息，打开客户端查看。").setContentIntent(open(cid)).setAutoCancel(true)
             .setVisibility(Notification.VISIBILITY_PRIVATE).setCategory(Notification.CATEGORY_MESSAGE)
             .setPriority(Notification.PRIORITY_HIGH).setDefaults(Notification.DEFAULT_ALL).setOnlyAlertOnce(!alert).setNumber(unread).build();

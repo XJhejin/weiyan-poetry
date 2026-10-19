@@ -20,7 +20,7 @@ def add(parent, name, **attrs):
 def build(wix, kind='client'):
     version = runpy.run_path(str(ROOT / '客户端/release_config.py'))['VERSION']
     control = kind == 'control'
-    name = 'HushLeaf 服务器控制端' if control else 'HushLeaf'
+    name = '未言诗集服务器控制端' if control else '未言诗集 HushLeaf'
     build_name = '未言诗集服务器控制端' if control else '未言诗集'
     source_folder = '服务器控制端' if control else '客户端'
     executable_name = build_name + '.exe'

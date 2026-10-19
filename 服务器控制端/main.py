@@ -107,8 +107,11 @@ def main():
     parser.add_argument('--no-open', action='store_true')
     parser.add_argument('--access-file', type=Path)
     parser.add_argument('--self-test', type=Path)
+    parser.add_argument('--self-test-profile', type=Path)
     args = parser.parse_args()
-    remote = Remote()
+    if args.self_test_profile and not args.self_test:
+        parser.error('--self-test-profile requires --self-test')
+    remote = Remote(args.self_test_profile if args.self_test else None)
     if args.self_test:
         try:
             host, state = remote.call('host'), remote.call('state')
@@ -138,7 +141,7 @@ def main():
                 time.sleep(0.5)
         else:
             import webview
-            window = webview.create_window('HushLeaf · 服务器控制端', url, width=1280, height=880,
+            window = webview.create_window('未言诗集 · 服务器控制端', url, width=1280, height=880,
                                            min_size=(1060, 720), background_color='#fff8fa', text_select=True)
             from window_effects import WindowEffects
             effects = WindowEffects(window, close_window=True)

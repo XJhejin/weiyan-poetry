@@ -13,7 +13,7 @@ if(/WeiyanAndroid/.test(navigator.userAgent)){
   $('#message-input').addEventListener('keydown',e=>{if(e.key==='Enter')e.stopImmediatePropagation();},true);
   let allowNotices=false,popupTimer,pendingConversation='';
   const popup=document.createElement('aside');popup.id='message-popup';popup.className='message-popup';popup.hidden=true;popup.setAttribute('role','status');
-  popup.innerHTML='<img src="/assets/logo.svg" alt=""><button class="message-popup-open"><b>HushLeaf</b><span>收到新的加密消息，点击查看。</span></button><button class="message-popup-close" aria-label="关闭消息提示">×</button>';document.body.append(popup);
+  popup.innerHTML='<img src="/assets/logo.svg" alt=""><button class="message-popup-open"><b>未言诗集</b><span>收到新的加密消息，点击查看。</span></button><button class="message-popup-close" aria-label="关闭消息提示">×</button>';document.body.append(popup);
   const dismiss=()=>{popup.hidden=true;clearTimeout(popupTimer);};
   window.weiyanSetMessageNotices=enabled=>{allowNotices=Boolean(enabled);if(!allowNotices)dismiss();};
   api('/desktop/notifications').then(i=>window.weiyanSetMessageNotices(i.enabled)).catch(()=>{});
