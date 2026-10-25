@@ -87,6 +87,47 @@ $discuz->init_mobile = false;
 $discuz->init_misc = false;
 $discuz->init();
 require_once libfile('function/cache');
+if ($action === 'mobile-content') {
+    $mobile = table_common_setting::t()->fetch('mobile', true);
+    $mobile['allowmobile'] = 1;
+    $mobile['mobileforward'] = 1;
+    // Include the same pinned topics that are visible on the desktop boards.
+    $mobile['forum']['displayorder3'] = 1;
+    table_common_setting::t()->update_batch(['mobile'=>$mobile]);
+    updatecache('setting');
+    echo json_encode(['ok'=>true, 'mobile_pinned_topics'=>true]); exit;
+}
+if ($action === 'snapshot-upload-limits') {
+    echo json_encode([
+        'usergroups'=>DB::fetch_all('SELECT groupid,maxattachsize,maxsizeperday FROM '.DB::table('common_usergroup_field')),
+        'types'=>DB::fetch_all('SELECT id,maxsize FROM '.DB::table('forum_attachtype')),
+    ], JSON_THROW_ON_ERROR); exit;
+}
+if ($action === 'restore-upload-limits') {
+    $snapshot = json_decode(stream_get_contents(STDIN), true, 512, JSON_THROW_ON_ERROR);
+    DB::query('START TRANSACTION');
+    foreach ($snapshot['usergroups'] as $row) {
+        DB::update('common_usergroup_field', ['maxattachsize'=>(int)$row['maxattachsize'],
+            'maxsizeperday'=>(int)$row['maxsizeperday']], ['groupid'=>(int)$row['groupid']]);
+    }
+    foreach ($snapshot['types'] as $row) {
+        DB::update('forum_attachtype', ['maxsize'=>(int)$row['maxsize']], ['id'=>(int)$row['id']]);
+    }
+    DB::query('COMMIT');
+    updatecache('usergroups');
+    updatecache('attachtype');
+    echo json_encode(['ok'=>true]); exit;
+}
+if ($action === 'upload-limits') {
+    $maximum = 1024 * 1024 * 1024;
+    // Upload permissions and prohibited extensions remain controlled by Discuz!.
+    DB::update('common_usergroup_field', ['maxattachsize'=>$maximum, 'maxsizeperday'=>0],
+        'allowpostattach > 0 OR allowpostimage > 0');
+    DB::query('UPDATE '.DB::table('forum_attachtype').' SET maxsize='.$maximum.' WHERE maxsize > 0');
+    updatecache('usergroups');
+    updatecache('attachtype');
+    echo json_encode(['ok'=>true, 'max_attachment_bytes'=>$maximum]); exit;
+}
 if ($action === 'theme' || $action === 'configure') {
     require_once libfile('function/admincp');
     require_once libfile('function/importdata');

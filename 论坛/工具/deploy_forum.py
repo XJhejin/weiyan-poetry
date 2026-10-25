@@ -214,17 +214,7 @@ def theme():
     header = header.replace('</head>', '<link rel="stylesheet" href="static/hushleaf/hushleaf.css?v=20261025">\n</head>')
     header += '\n' + (HERE / 'theme-header.htm').read_text('utf-8')
     (target / 'common/header.php').write_text(header, 'utf-8')
-    # The stock mobile templates retain all native mobile navigation and posting.
-    mobile = target / 'touch/common'
-    mobile.mkdir(parents=True, exist_ok=True)
-    mobile_header = (CURRENT / 'template/default/touch/common/header.php').read_text('utf-8-sig')
-    mobile_header = mobile_header.replace('</head>', '<link rel="stylesheet" href="static/hushleaf/mobile.css?v=20261025">\n</head>')
-    (mobile / 'header.php').write_text(mobile_header, 'utf-8')
-    mobile_forum = (CURRENT / 'template/default/touch/forum/discuz.php').read_text('utf-8-sig')
-    intro = '''<section class="hl-mobile-intro"><img src="static/hushleaf/logo.svg" alt=""><small>HUSHLEAF COMMUNITY</small><h1>把未言之意，<br>写成相逢。</h1><p>写下所思，分享所见。<br>在这里，与同路的掇花者相遇。</p></section>'''
-    mobile_forum = mobile_forum.replace('<!--[diy=diy1]-->', intro + '\n<!--[diy=diy1]-->', 1)
-    (target / 'touch/forum').mkdir(exist_ok=True)
-    (target / 'touch/forum/discuz.php').write_text(mobile_forum, 'utf-8')
+    install_mobile_templates()
     style = json.loads((source / 'discuz_style_discuzx5.json').read_text('utf-8-sig'))
     data = style['Data']
     data.update(name='未言诗集 · HushLeaf', tplname='未言诗集 · HushLeaf',
@@ -253,6 +243,27 @@ def theme():
         old.unlink()
     (target / 'discuz_style_hushleaf.json').write_text(json.dumps(style, ensure_ascii=False), 'utf-8')
     for path in target.rglob('*'):
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
+
+def install_mobile_templates():
+    """Keep the complete native touch view, including board-specific DIY pages."""
+    source = CURRENT / 'template/default/touch'
+    target = CURRENT / 'template/hushleaf'
+    # Discuz! does not consistently fall back to default templates for DIY clones
+    # such as forumdisplay:<fid>. A header and index alone leave boards unusable.
+    shutil.copytree(source, target / 'touch', dirs_exist_ok=True)
+    mobile = target / 'touch/common'
+    mobile.mkdir(parents=True, exist_ok=True)
+    mobile_header = (CURRENT / 'template/default/touch/common/header.php').read_text('utf-8-sig')
+    mobile_header = mobile_header.replace('</head>', '<link rel="stylesheet" href="static/hushleaf/mobile.css?v=20261025">\n</head>')
+    (mobile / 'header.php').write_text(mobile_header, 'utf-8')
+    mobile_forum = (CURRENT / 'template/default/touch/forum/discuz.php').read_text('utf-8-sig')
+    intro = '''<section class="hl-mobile-intro"><img src="static/hushleaf/logo.svg" alt=""><small>HUSHLEAF COMMUNITY</small><h1>把未言之意，<br>写成相逢。</h1><p>写下所思，分享所见。<br>在这里，与同路的掇花者相遇。</p></section>'''
+    mobile_forum = mobile_forum.replace('<!--[diy=diy1]-->', intro + '\n<!--[diy=diy1]-->', 1)
+    (target / 'touch/forum').mkdir(exist_ok=True)
+    (target / 'touch/forum/discuz.php').write_text(mobile_forum, 'utf-8')
+    for path in (target / 'touch').rglob('*'):
         path.chmod(0o755 if path.is_dir() else 0o644)
 
 
@@ -289,9 +300,10 @@ php_admin_value[error_log] = /var/lib/weiyan-forum/php-errors.log
 php_admin_value[session.save_path] = /var/lib/weiyan-forum/sessions
 php_admin_value[upload_tmp_dir] = /var/lib/weiyan-forum/uploads
 php_admin_value[memory_limit] = 192M
-php_admin_value[upload_max_filesize] = 64M
-php_admin_value[post_max_size] = 66M
-php_admin_value[max_execution_time] = 120
+php_admin_value[upload_max_filesize] = 1024M
+php_admin_value[post_max_size] = 1088M
+php_admin_value[max_input_time] = 3600
+php_admin_value[max_execution_time] = 3600
 php_admin_value[date.timezone] = Asia/Hong_Kong
 php_admin_value[mysqli.default_socket] = {DB_SOCKET}
 php_admin_value[open_basedir] = /opt/weiyan/forum/:/var/lib/weiyan-forum/:/var/lib/weiyan-forum-db/run/:/tmp/:/www/server/php/82/:/dev/urandom
@@ -359,10 +371,15 @@ https://bbs.hushleaf.top {
     respond @private 404
     @uploaded_php path_regexp uploaded_php ^/(data|static)/.*\\.(php[0-9]?|phtml|phar)(/|$)
     respond @uploaded_php 404
+    request_body {
+        max_size 1140850688
+    }
     php_fastcgi 127.0.0.1:23274 {
         env HTTPS on
         env HTTP_X_FORWARDED_PROTO https
         env SERVER_PORT 443
+        read_timeout 3600s
+        write_timeout 3600s
     }
     file_server
 }
@@ -529,6 +546,10 @@ def main():
         progress('updating_theme')
         theme(); php('theme')
         verification = json.loads(php('verify'))
+    progress('configuring_mobile_content')
+    php('mobile-content')
+    progress('configuring_attachment_limits')
+    php('upload-limits')
     progress('starting_isolated_php_service')
     install_runtime()
     progress('activating_https_site')
