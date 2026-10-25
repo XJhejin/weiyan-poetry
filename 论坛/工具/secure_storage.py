@@ -54,4 +54,3 @@ def private_file(path):
         raise ValueError('无法识别 Windows 账号。')
     subprocess.run(['icacls', str(path), '/inheritance:r', '/remove:g', '*S-1-3-4', '/grant:r', '*' + sid + ':F'],
                    capture_output=True, check=True, creationflags=flags)
-
