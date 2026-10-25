@@ -8,8 +8,9 @@
   dialog.className = 'hl-media-dialog';
   dialog.innerHTML = '<form method="dialog" class="hl-media-form">' +
     '<div class="hl-media-heading"><h2>插入媒体</h2><button type="button" class="hl-media-close" aria-label="关闭">×</button></div>' +
-    '<label>链接<input class="hl-media-url" type="url" placeholder="https://" autocomplete="off"></label>' +
-    '<label class="hl-media-local">或上传本地文件<input class="hl-media-file" type="file"><small>单个附件最大 1 GB，仍受当前账号和板块权限限制。</small></label>' +
+    '<div class="hl-media-sources" role="group" aria-label="媒体来源"><button type="button" data-source="file" aria-pressed="true">上传附件</button><button type="button" data-source="url" aria-pressed="false">网络链接</button></div>' +
+    '<label class="hl-media-link" hidden>链接<input class="hl-media-url" type="url" placeholder="https://" autocomplete="off" disabled></label>' +
+    '<label class="hl-media-local">选择本地文件<input class="hl-media-file" type="file"><span class="hl-media-file-info"></span><small>文件作为本帖附件上传并插入播放器，发布帖子后保存。单个附件最大 1 GB，仍受当前账号和板块权限限制。</small></label>' +
     '<div class="hl-media-dimensions"><label>宽度<input class="hl-media-width" value="100%" required placeholder="100% 或 720"></label>' +
     '<label>高度（像素）<input class="hl-media-height" type="number" min="40" max="1920" required value="405"></label></div>' +
     '<p class="hl-media-help">宽度支持 1%–100% 或 120–1920 像素；手机端自动适应屏幕。网页能否嵌入取决于对方网站设置。</p>' +
@@ -19,25 +20,42 @@
   const find = s => dialog.querySelector(s);
   const status = find('.hl-media-status'), submit = find('.hl-media-submit'), file = find('.hl-media-file');
   let busy = false;
+  let sourceMode = 'file';
+  function setSource(mode) {
+    if (busy) return;
+    sourceMode = mode;
+    find('.hl-media-local').hidden = mode !== 'file';
+    find('.hl-media-link').hidden = mode !== 'url';
+    file.disabled = mode !== 'file';
+    find('.hl-media-url').disabled = mode !== 'url';
+    dialog.querySelectorAll('[data-source]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.source === mode)));
+    status.textContent = '';
+  }
+  dialog.querySelectorAll('[data-source]').forEach(button => button.onclick = () => setSource(button.dataset.source));
   function close() { if (!busy) dialog.close(); }
   find('.hl-media-close').onclick = close;
   find('.hl-media-cancel').onclick = close;
   dialog.addEventListener('cancel', e => { if (busy) e.preventDefault(); });
   dialog.addEventListener('click', e => { if (e.target === dialog) close(); });
-  file.addEventListener('change', () => { if (file.files.length) find('.hl-media-url').value = ''; });
-  find('.hl-media-url').addEventListener('input', () => { file.value = ''; });
+  file.addEventListener('change', () => {
+    const selected = file.files[0];
+    find('.hl-media-file-info').textContent = selected ? selected.name + ' · ' + (selected.size / 1048576).toFixed(2) + ' MB' : '';
+    status.textContent = '';
+  });
 
   function open(textarea, type) {
     active = {textarea, type, start: textarea.selectionStart, end: textarea.selectionEnd,
       blockIndex: window.editor?.blocks?.getCurrentBlockIndex?.()};
     find('h2').textContent = '插入' + labels[type];
     find('.hl-media-url').value = ''; file.value = ''; status.textContent = '';
-    find('.hl-media-local').hidden = type === 'web';
+    find('.hl-media-file-info').textContent = '';
+    find('.hl-media-sources').hidden = type === 'web';
+    setSource(type === 'web' ? 'url' : 'file');
     file.accept = type === 'video' ? '.mp4,.webm,.ogv,.mov,.m4v' : '.mp3,.m4a,.ogg,.wav,.aac,.flac,.opus';
     find('.hl-media-width').value = '100%';
     find('.hl-media-height').value = type === 'video' ? '405' : type === 'audio' ? '54' : '480';
     dialog.showModal();
-    find('.hl-media-url').focus();
+    (sourceMode === 'file' ? file : find('.hl-media-url')).focus();
   }
 
   async function upload(selected, textarea) {
@@ -66,7 +84,10 @@
     const match = /DISCUZUPLOAD\|0\|(\d+)\|/.exec(response);
     if (!match) throw new Error('论坛拒绝了该附件，请检查板块权限、文件类型及大小。');
     const aid = match[1];
-    const input = document.createElement('input');input.type='hidden';input.name='attachnew[' + aid + '][description]';input.value='';form.appendChild(input);
+    const name = 'attachnew[' + aid + '][description]';
+    if (!Array.from(form.elements).some(input => input.name === name)) {
+      const input = document.createElement('input');input.type='hidden';input.name=name;input.value='';form.appendChild(input);
+    }
     return 'attach:' + aid;
   }
 
@@ -79,12 +100,14 @@
     if ((!pixels && !percentage) || !Number.isInteger(height) || height<40 || height>1920) {status.textContent='请填写有效的宽度和高度。';return;}
     if (pixels) width = String(Number(width));
     let source = find('.hl-media-url').value.trim();
-    const selected = active.type !== 'web' && file.files[0];
-    if (!selected) {
+    const selected = sourceMode === 'file' && file.files[0];
+    if (sourceMode === 'file' && !selected) {status.textContent='请选择需要上传的本地文件。';return;}
+    if (sourceMode === 'url') {
       try { const url = new URL(source);if(url.protocol!=='https:' || url.username || url.password || /[\s<>"'\\\[\]]/.test(source)) throw new Error(); }
       catch {status.textContent='请填写 HTTPS 链接，或选择本地音视频文件。';return;}
     }
-    busy=true;submit.disabled=true;find('.hl-media-close').disabled=true;find('.hl-media-cancel').disabled=true;
+    busy=true;
+    dialog.querySelectorAll('button,input').forEach(control => control.disabled=true);
     try {
       if (selected) source = await upload(selected, active.textarea);
       const {textarea,type,start,end}=active;
@@ -102,7 +125,11 @@
       }
       dialog.close();textarea.focus();
     } catch (error) {status.textContent=error.message || '操作未完成，请重试。';}
-    finally {busy=false;submit.disabled=false;find('.hl-media-close').disabled=false;find('.hl-media-cancel').disabled=false;}
+    finally {
+      busy=false;
+      dialog.querySelectorAll('button,input').forEach(control => control.disabled=false);
+      file.disabled=sourceMode!=='file';find('.hl-media-url').disabled=sourceMode!=='url';
+    }
   });
 
   function mount() {

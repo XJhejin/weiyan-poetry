@@ -8,6 +8,8 @@
 
 当前版本为 **2.2.2**。以「未言诗集」为主名称，HushLeaf 为次要英文名；采用统一的无框羽毛笔 Logo，保留 macOS 风格浅粉界面、加密聊天、引用与 @ 提醒。官网和安装包由服务器提供。
 
+[未言诗个人主页](https://weiyan.hushleaf.top/)介绍作者，并连接 B 站、官网及 [HushLeafBBS 社区](https://bbs.hushleaf.top/)。个人站源码与独立部署工具位于 `个人主页/`；论坛主题及媒体附件插件位于 `论坛/`。
+
 ## 下载与使用
 
 在 [未言诗集官网](https://www.hushleaf.top/#download)从服务器直接下载安装包，也可使用 [GitHub Releases](https://github.com/XJhejin/weiyan-poetry/releases/latest)：

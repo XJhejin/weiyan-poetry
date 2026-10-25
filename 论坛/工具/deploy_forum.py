@@ -298,6 +298,36 @@ def install_media_extension():
     for name in ('media.js', 'media.css'):
         shutil.copyfile(HERE / name, static / name)
         (static / name).chmod(0o644)
+    install_upload_language_compatibility()
+
+
+def install_upload_language_compatibility():
+    """Keep the pinned native uploader usable before its async language file loads."""
+    path = CURRENT / 'static/js/common.js'
+    source = path.read_text('utf-8')
+    replacements = [
+        ("var _i18n_ = 'default';",
+         "var _hlLanguageVersion = typeof VERHASH == 'undefined' ? '' : VERHASH;\nvar _i18n_ = 'default';"),
+        ("_JSLANG_ = JSON.parse(loadUserdata('i18n_' + _i18n_));",
+         "_JSLANG_ = JSON.parse(loadUserdata('i18n_' + _i18n_)) || {};"),
+        ("(typeof (JSCACHEPATH) == 'undefined' ? JSPATH : JSCACHEPATH)",
+         "(typeof (JSCACHEPATH) == 'undefined' ? (typeof (JSPATH) == 'undefined' ? 'data/cache/' : JSPATH) : JSCACHEPATH)"),
+        ("_JSLANG_['_verhash_'] != VERHASH", "_JSLANG_['_verhash_'] != _hlLanguageVersion"),
+        ("'lang_' + _i18n_ + '.js?' + VERHASH", "'lang_' + _i18n_ + '.js?' + _hlLanguageVersion"),
+        ("_JSLANG_['_verhash_'] = VERHASH;", "_JSLANG_['_verhash_'] = _hlLanguageVersion;"),
+    ]
+    for before, after in replacements:
+        if after in source:
+            continue
+        elif before in source:
+            if source.count(before) != 1:
+                raise RuntimeError('Unexpected native language loader; compatibility update refused')
+            source = source.replace(before, after, 1)
+        else:
+            raise RuntimeError('Native language loader changed; review the upstream update first')
+    path.write_text(source, 'utf-8')
+    # media-extension refreshes native setting caches immediately after installation,
+    # rebuilding data/cache/common.js from this guarded source change.
 
 
 def install_runtime():

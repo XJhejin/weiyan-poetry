@@ -1,0 +1,35 @@
+{
+  "checked_on": "2026-10-25",
+  "display_name": "未言诗",
+  "introduction": "夢の言葉はまだ詩になっていない，",
+  "introduction_source": "用户指定，优先于平台签名",
+  "bilibili": {
+    "url": "https://space.bilibili.com/689055360",
+    "public_api": "https://api.bilibili.com/x/web-interface/card?mid=689055360",
+    "name": "梦语未言诗",
+    "signature_excerpt": "言葉にしない",
+    "avatar_source": "https://i0.hdslb.com/bfs/face/e4833f3338f2861be798d0a18ddc99e114c1448c.webp"
+  },
+  "notes": "采用本人指定介绍和联系方式，以及已核实的 B 站公开名称、签名首句和头像；不推断个人经历。头像由本服务器托管。",
+  "contacts": {
+    "qq_group": "832380739",
+    "personal_qq": "480320462",
+    "wechat": "IwantKFCv50",
+    "source": "用户明确要求在个人站公开，群号和微信同时与 B 站公开签名相符"
+  },
+  "company": {
+    "name": "上海月轮谷网络科技有限公司",
+    "department": "音乐事业部",
+    "role": "签约音乐制作人",
+    "skills": [
+      "作曲",
+      "编曲",
+      "作词"
+    ],
+    "site": "https://www.yuelungu.com/",
+    "member_source": "https://www.yuelungu.com/music/members",
+    "identity_match": "成员未言诗的 B 站链接对应 UID 689055360",
+    "commission_email": "musicgroup@yuelungu.com",
+    "email_source": "用户指定，与音乐事业部官网联系方式相符"
+  }
+}

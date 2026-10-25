@@ -32,7 +32,7 @@ class plugin_hushleaf_media {
     }
 
     public function global_footer() {
-        return '<link rel="stylesheet" href="static/hushleaf/media.css?v=2"><script defer src="static/hushleaf/media.js?v=2"></script>';
+        return '<link rel="stylesheet" href="static/hushleaf/media.css?v=3"><script defer src="static/hushleaf/media.js?v=3"></script>';
     }
 
     public function global_footer_mobile() { return $this->global_footer(); }
