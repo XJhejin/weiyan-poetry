@@ -46,6 +46,12 @@
   function open(textarea, type) {
     active = {textarea, type, start: textarea.selectionStart, end: textarea.selectionEnd,
       blockIndex: window.editor?.blocks?.getCurrentBlockIndex?.()};
+    if (textarea.id === String(window.editorid) + '_textarea' && window.wysiwyg) {
+      const selection = window.editdoc?.getSelection();
+      if (selection?.rangeCount && window.editdoc.body.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+        active.range = selection.getRangeAt(0).cloneRange();
+      }
+    }
     find('h2').textContent = '插入' + labels[type];
     find('.hl-media-url').value = ''; file.value = ''; status.textContent = '';
     find('.hl-media-file-info').textContent = '';
@@ -118,12 +124,21 @@
         const index = Number.isInteger(active.blockIndex) && active.blockIndex >= 0 ? active.blockIndex + 1 : window.editor.blocks.getBlocksCount();
         window.editor.blocks.insert('paragraph',{text},undefined,index,true);
       } else if (textarea.id === String(window.editorid) + '_textarea' && typeof window.insertText === 'function') {
+        if (window.wysiwyg && active.range) {
+          const selection = window.editdoc.getSelection();
+          selection.removeAllRanges();selection.addRange(active.range);
+        } else if (!window.wysiwyg) {
+          textarea.setSelectionRange(start,end);
+          textarea._selectionStart=0;textarea._selectionEnd=0;
+        }
         window.insertText(tag);
       } else {
         textarea.focus();textarea.setSelectionRange(start,end);textarea.setRangeText(tag,start,end,'end');
         textarea.dispatchEvent(new Event('input',{bubbles:true}));textarea.dispatchEvent(new Event('change',{bubbles:true}));
       }
-      dialog.close();textarea.focus();
+      dialog.close();
+      if (textarea.id === String(window.editorid) + '_textarea' && typeof window.checkFocus === 'function') window.checkFocus();
+      else textarea.focus();
     } catch (error) {status.textContent=error.message || '操作未完成，请重试。';}
     finally {
       busy=false;
@@ -131,6 +146,20 @@
       file.disabled=sourceMode!=='file';find('.hl-media-url').disabled=sourceMode!=='url';
     }
   });
+
+  // Discuz rebuilds and rebinds these controls when switching editor modes.
+  // Capture their clicks before the original URL-only media menu opens.
+  document.addEventListener('click', event => {
+    const button = event.target.closest?.('a,button');
+    const prefix = String(window.editorid);
+    const type = button?.id === prefix + '_aud' ? 'audio' : button?.id === prefix + '_vid' ? 'video' : null;
+    if (!type) return;
+    const textarea = document.getElementById(prefix + '_textarea');
+    const controls = document.getElementById(prefix + '_controls');
+    if (!textarea || !controls?.contains(button)) return;
+    event.preventDefault();event.stopImmediatePropagation();
+    open(textarea,type);
+  }, true);
 
   function mount() {
     document.querySelectorAll('textarea[name="message"],textarea#fastpostmessage,.json-editor input[name="message"]').forEach(textarea => {
