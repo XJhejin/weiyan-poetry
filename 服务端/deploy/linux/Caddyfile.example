@@ -8,7 +8,7 @@ https://{$WEIYAN_PUBLIC_IP}:23074 {
         issuer acme {
             dir https://acme-v02.api.letsencrypt.org/directory
             profile shortlived
-            disable_tlsalpn_challenge
+            disable_http_challenge
         }
     }
     request_body {

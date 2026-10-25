@@ -1,0 +1,76 @@
+$OutputEncoding = [Text.UTF8Encoding]::new()
+[Console]::OutputEncoding = $OutputEncoding
+$Host.UI.RawUI.WindowTitle = '未言诗集 - Discuz 论坛部署登录'
+Write-Host '临时会话仅用于 Discuz 论坛环境检查及部署，不保存 SSH 密码、不添加 SSH 授权。'
+Write-Host '登录后请保持窗口打开，助手将在同一个连接中完成检查。'
+Read-Host '准备好后按回车，再在 password 提示后输入密码' > $null
+$arguments = @(
+    '-F',
+    'NUL',
+    '-T',
+    '-p',
+    '22',
+    '-o',
+    'BatchMode=no',
+    '-o',
+    'PubkeyAuthentication=no',
+    '-o',
+    'PreferredAuthentications=password,keyboard-interactive',
+    '-o',
+    'StrictHostKeyChecking=yes',
+    '-o',
+    'UserKnownHostsFile=@@KNOWN_HOSTS@@',
+    '-o',
+    'GlobalKnownHostsFile=NUL',
+    '-o',
+    'ClearAllForwardings=yes',
+    '-o',
+    'ConnectTimeout=20',
+    '-o',
+    'ServerAliveInterval=15',
+    '-o',
+    'ServerAliveCountMax=8',
+    'root@156.225.28.175',
+    '/opt/weiyan/control/venv/bin/python -u -c ''import zlib;exec(zlib.decompress(bytes.fromhex("@@BOOTSTRAP_HEX@@")))'''
+)
+$rpcLog = Join-Path $PSScriptRoot 'forum-session-output.txt'
+$rpcRequests = Join-Path $PSScriptRoot 'forum-requests'
+New-Item -ItemType Directory -Path $rpcRequests -Force > $null
+$startInfo = New-Object System.Diagnostics.ProcessStartInfo
+$startInfo.FileName = 'C:/Windows/System32/OpenSSH/ssh.exe'
+$startInfo.Arguments = (($arguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }) -join ' ')
+$startInfo.UseShellExecute = $false
+$startInfo.RedirectStandardInput = $true
+$startInfo.RedirectStandardOutput = $true
+$startInfo.RedirectStandardError = $false
+$rpcProcess = New-Object System.Diagnostics.Process
+$rpcProcess.StartInfo = $startInfo
+$rpcProcess.Start() > $null
+$rpcRead = $rpcProcess.StandardOutput.ReadLineAsync()
+$rpcReady = $false
+try {
+    while ($true) {
+        if ($rpcRead.IsCompleted) {
+            $rpcLine = $rpcRead.GetAwaiter().GetResult()
+            if ($null -eq $rpcLine) { break }
+            Write-Host $rpcLine
+            [IO.File]::AppendAllText($rpcLog, $rpcLine + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+            try { if (($rpcLine | ConvertFrom-Json).ready) { $rpcReady = $true } } catch {}
+            $rpcRead = $rpcProcess.StandardOutput.ReadLineAsync()
+        }
+        if ($rpcReady) {
+            foreach ($rpcRequest in Get-ChildItem -LiteralPath $rpcRequests -Filter '*.json' -File | Sort-Object Name) {
+                $rpcBody = [IO.File]::ReadAllText($rpcRequest.FullName, [Text.Encoding]::UTF8)
+                $rpcProcess.StandardInput.WriteLine($rpcBody)
+                $rpcProcess.StandardInput.Flush()
+                Move-Item -LiteralPath $rpcRequest.FullName -Destination ($rpcRequest.FullName + '.sent')
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+} finally {
+    $rpcProcess.StandardInput.Close()
+    $rpcProcess.WaitForExit()
+    Set-Content -LiteralPath (Join-Path $PSScriptRoot 'forum-session-status.txt') -Value $rpcProcess.ExitCode
+}
+Read-Host '连接结束，按回车关闭此窗口'

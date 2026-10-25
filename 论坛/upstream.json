@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/DiscuzTeam/DiscuzX",
+  "branch": "MitFrame",
+  "commit": "3db25375efc48a05c7d3594f51ff7225c38be8c2",
+  "version": "Discuz! X5.0.4 Open",
+  "language": "SC_UTF8",
+  "domain": "bbs.hushleaf.top",
+  "source_archive_sha256": "ddb7a75d52b32e68763dfeddca46948bae99be0beaeabba76581c11fb69ad219"
+}

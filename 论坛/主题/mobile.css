@@ -1,0 +1,24 @@
+/* HushLeaf theme for the native Discuz! touch templates. */
+body {
+  --dz-BG-body:#fcf8fa!important;--dz-BG-color:#a96788!important;--dz-BG-0:#fffdfefe!important;
+  --dz-BG-1:#493949!important;--dz-BG-5:#f7edf3!important;--dz-BG-6:#e6d7e1!important;
+  --dz-FC-color:#a96788!important;--dz-FC-333:#493949!important;--dz-FC-666:#7d6b79!important;
+  --dz-FC-999:#a28e9c!important;--dz-BOR-ed:#eee1e8!important;
+  background:#fcf8fa!important;color:#493949;font-family:-apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif;
+  padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)
+}
+.header {background:#fcf8faf5!important;border-bottom:1px solid #eee1e8;backdrop-filter:blur(18px)}
+.header,.header i,.header h2 a,.header .my a {color:#704c64!important}
+.header .myss a {background:#f2e5ee;color:#8b5d78!important;padding:0 10px}
+.header .myss a i {color:#a47c95!important}
+.mzlogo img {width:148px!important;height:44px!important;object-fit:contain}
+.footer,.footer-nav {background:#fffdfef5!important;backdrop-filter:blur(18px);border-color:#eee1e8!important}
+.forumlist,.forumlist_box,.forumlist ul,.forumlist li,.bm,.hotbox,.listbox,.userbox {border-color:#eee1e8!important}
+.forumlist,.hotbox,.userbox {border-radius:15px;margin:12px;background:#fffdfefe}
+.hl-mobile-intro {margin:14px 14px 22px;padding:27px 24px 25px;border-radius:18px;background:linear-gradient(125deg,#f4e7ef,#fffafb);position:relative;overflow:hidden}
+.hl-mobile-intro img {position:absolute;right:12px;top:28px;width:90px;height:90px;opacity:.27;transform:rotate(-8deg)}
+.hl-mobile-intro small {font-size:8px;letter-spacing:2.8px;color:#a68096;display:block;margin-bottom:13px}
+.hl-mobile-intro h1 {font-family:"Songti SC","SimSun",serif;line-height:1.6;font-size:28px;letter-spacing:2px;font-weight:400;color:#704c64}
+.hl-mobile-intro p {font-size:11px;color:#a08396;line-height:1.9;margin-top:12px;position:relative}
+a,button,input {transition:background-color .2s,color .2s,border-color .2s}
+@media (prefers-reduced-motion:reduce) {*,*:before,*:after {transition:none!important;animation:none!important}}

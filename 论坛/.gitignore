@@ -1,0 +1,17 @@
+.build/
+__pycache__/
+*.pyc
+.venv/
+*.dpapi
+*.log
+*.sqlite*
+*.sql*
+*.zip
+*.tar.gz
+.env*
+data/
+config_global.php
+config_ucenter.php
+secrets.json
+forum-config.json
+
