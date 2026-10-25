@@ -2,7 +2,8 @@
 
 基于 Discuz! 官方简体中文开源版的社区站点，提供未言诗集原创浅粉主题、羽毛笔标志和独立部署工具。
 
-论坛地址：https://bbs.hushleaf.top/  
+论坛地址：https://bbs.hushleaf.top/
+
 管理后台：https://bbs.hushleaf.top/admin.php
 
 发帖、回复、附件、搜索、私信、会员、版主、门户、圈子及后台管理均使用 Discuz! 原生功能。桌面与手机端统一品牌外观，手机浏览器自动使用原生移动界面。
