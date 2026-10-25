@@ -62,8 +62,11 @@ def main():
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as bundle:
         for name in ('deploy_forum.py', 'configure_forum.php'):
             bundle.writestr(name, (FORUM / '工具' / name).read_bytes())
-        for name in ('hushleaf.css', 'mobile.css', 'logo.svg', 'wordmark.svg', 'theme-header.htm', 'LICENSE-notice.md'):
+        for name in ('hushleaf.css', 'mobile.css', 'logo.svg', 'wordmark.svg', 'theme-header.htm', 'mobile-signature.htm', 'LICENSE-notice.md'):
             bundle.writestr(name, (FORUM / '主题' / name).read_bytes())
+        for path in sorted((FORUM / '插件/hushleaf_media').iterdir()):
+            if path.suffix in ('.php', '.js', '.css'):
+                bundle.writestr(path.name, path.read_bytes())
         bundle.writestr('forum-config.json', json.dumps(config))
     raw = buffer.getvalue()
     (BUILD / 'forum-bundle.zip').write_bytes(raw)

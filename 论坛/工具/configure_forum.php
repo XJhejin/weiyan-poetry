@@ -86,7 +86,59 @@ $discuz->init_user = false;
 $discuz->init_mobile = false;
 $discuz->init_misc = false;
 $discuz->init();
+// The core replaces the global request array during environment initialization.
+// Rebind after initialization instead of keeping a stale pre-core reference.
+global $_G;
 require_once libfile('function/cache');
+if ($action === 'media-extension') {
+    $modules = [];
+    foreach ([11, 28] as $type) {
+        $modules[] = ['name'=>'hushleaf_media', 'menu'=>'', 'url'=>'', 'type'=>$type,
+            'adminid'=>0, 'displayorder'=>0];
+    }
+    $record = ['available'=>1, 'adminid'=>1, 'name'=>'未言诗集 · 媒体嵌入',
+        'identifier'=>'hushleaf_media', 'description'=>'视频、音频、网页与自定义尺寸',
+        'directory'=>'hushleaf_media/', 'copyright'=>'HushLeaf', 'version'=>'1.0.0',
+        'modules'=>serialize($modules)];
+    $old = table_common_plugin::t()->fetch_by_identifier('hushleaf_media');
+    if ($old) { table_common_plugin::t()->update($old['pluginid'], $record); }
+    else { table_common_plugin::t()->insert($record); }
+    // Enable native media codes for groups that can post, and current boards.
+    // This does not grant posting, upload, viewing or attachment permissions.
+    DB::update('common_usergroup_field', ['allowmediacode'=>1], 'allowpost > 0 OR allowreply > 0');
+    DB::update('forum_forum', ['allowmediacode'=>1], "type='forum'");
+    updatecache('usergroups');
+    updatecache('forums');
+    updatecache('plugin');
+    updatecache('setting');
+    echo json_encode(['ok'=>true, 'media_extension'=>true]); exit;
+}
+if ($action === 'media-runtime') {
+    require $root.'config/config_global.php';
+    // Native download mode 1 streams in bounded chunks and supports media seeking.
+    $_config['download']['readmod'] = 1;
+    file_put_contents($root.'config/config_global.php', "<?php\n// Generated locally; never distribute this file.\n\$_config = ".var_export($_config, true).";\n");
+    echo json_encode(['ok'=>true, 'media_range'=>true]); exit;
+}
+if ($action === 'media-refresh') {
+    foreach (['usergroups','forums','plugin','setting'] as $cache) { updatecache($cache); }
+    echo json_encode(['ok'=>true]); exit;
+}
+if ($action === 'media-verify') {
+    require_once libfile('function/discuzcode');
+    $render = function ($text, $bbcodeoff = false) {
+        return discuzcode($text, false, $bbcodeoff, 0, 1, 1, 1, 0, 0, 0, 1, 1, 987654321);
+    };
+    $tag = '[hlweb=100%,480]https://example.com/?a=1&b=2[/hlweb]';
+    $checks = [
+        'native_hook'=>str_contains($render($tag), '<iframe'),
+        'code_example'=>!str_contains($render('[code]'.$tag.'[/code]'), '<iframe'),
+        'bbcode_disabled'=>!str_contains($render($tag, true), '<iframe'),
+        'hidden_content'=>!str_contains($render('[hide=9999999]'.$tag.'[/hide]'), '<iframe'),
+        'mobile_hook'=>!empty($_G['setting']['plugins']['func']['hookscriptmobile']['discuzcode']),
+    ];
+    echo json_encode(['ok'=>!in_array(false, $checks, true), 'checks'=>$checks]); exit;
+}
 if ($action === 'mobile-content') {
     $mobile = table_common_setting::t()->fetch('mobile', true);
     $mobile['allowmobile'] = 1;

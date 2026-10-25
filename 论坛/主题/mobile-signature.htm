@@ -1,0 +1,6 @@
+<!--{if !$needhiddenreply && !($post['first'] && $_G['forum_threadpay'])}-->
+<!--{if $post['signature'] && (($_G['setting']['bannedmessages'] & 4) && ($post['memberstatus'] == '-1' || ($post['authorid'] && !$post['username']) || $post['groupid'] == 4 || $post['groupid'] == 5) || ($post['status'] & 1))}-->
+<!--{elseif $post['signature'] && !$post['anonymous'] && $showsignatures}-->
+<aside class="hl-mobile-signature" aria-label="作者签名" style="max-height:{$_G['setting']['maxsigrows']}px;"><span>签名</span><div>$post['signature']</div></aside>
+<!--{/if}-->
+<!--{/if}-->

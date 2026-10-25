@@ -215,6 +215,7 @@ def theme():
     header += '\n' + (HERE / 'theme-header.htm').read_text('utf-8')
     (target / 'common/header.php').write_text(header, 'utf-8')
     install_mobile_templates()
+    install_media_extension()
     style = json.loads((source / 'discuz_style_discuzx5.json').read_text('utf-8-sig'))
     data = style['Data']
     data.update(name='未言诗集 · HushLeaf', tplname='未言诗集 · HushLeaf',
@@ -263,8 +264,40 @@ def install_mobile_templates():
     mobile_forum = mobile_forum.replace('<!--[diy=diy1]-->', intro + '\n<!--[diy=diy1]-->', 1)
     (target / 'touch/forum').mkdir(exist_ok=True)
     (target / 'touch/forum/discuz.php').write_text(mobile_forum, 'utf-8')
+    install_mobile_signatures()
     for path in (target / 'touch').rglob('*'):
         path.chmod(0o755 if path.is_dir() else 0o644)
+
+
+def install_mobile_signatures():
+    """Use the native, already filtered signature in full and AJAX post views."""
+    snippet = (HERE / 'mobile-signature.htm').read_text('utf-8')
+    source = CURRENT / 'template/default/touch/forum'
+    target = CURRENT / 'template/hushleaf/touch/forum'
+    for name in ('viewthread.php', 'viewthread_node.php'):
+        content = (source / name).read_text('utf-8-sig')
+        marker = '\n\t\t\t<!--{if $_G[\'setting\'][\'mobile\'][\'mobilesimpletype\']' if name == 'viewthread_node.php' else '\n\t\t\t<!--{if ($_G[\'setting\'][\'mobile\'][\'mobilesimpletype\']'
+        if content.count(marker) != 1:
+            raise RuntimeError('Native mobile post template changed: ' + name)
+        content = content.replace(marker, '\n' + snippet + marker, 1)
+        (target / name).write_text(content, 'utf-8')
+        (target / name).chmod(0o644)
+
+
+def install_media_extension():
+    plugin = CURRENT / 'source/plugin/hushleaf_media'
+    static = CURRENT / 'static/hushleaf'
+    plugin.mkdir(parents=True, exist_ok=True, mode=0o755)
+    static.mkdir(parents=True, exist_ok=True, mode=0o755)
+    plugin.chmod(0o755)
+    static.chmod(0o755)
+    for name in ('render.php', 'hushleaf_media.class.php', 'uploadconfig.inc.php', 'stream.inc.php'):
+        run([PHP, '-l', str(HERE / name)])
+        shutil.copyfile(HERE / name, plugin / name)
+        (plugin / name).chmod(0o644)
+    for name in ('media.js', 'media.css'):
+        shutil.copyfile(HERE / name, static / name)
+        (static / name).chmod(0o644)
 
 
 def install_runtime():
@@ -550,6 +583,9 @@ def main():
     php('mobile-content')
     progress('configuring_attachment_limits')
     php('upload-limits')
+    progress('configuring_media_extension')
+    php('media-extension')
+    php('media-runtime')
     progress('starting_isolated_php_service')
     install_runtime()
     progress('activating_https_site')
