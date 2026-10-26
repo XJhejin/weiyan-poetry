@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1200" viewBox="0 0 800 1200">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fffaf7"/>
+      <stop offset="1" stop-color="#f8eceb"/>
+    </linearGradient>
+    <linearGradient id="hair" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6a4038"/>
+      <stop offset="1" stop-color="#3e2527"/>
+    </linearGradient>
+    <linearGradient id="cardigan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#d8a7ae"/>
+      <stop offset="1" stop-color="#b97886"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+
+  <rect width="800" height="1200" fill="url(#bg)"/>
+  <path d="M108 1000 C180 930 245 960 300 1030 S480 1120 610 1015 S710 950 760 1008" fill="none" stroke="#e7c5c8" stroke-width="3" opacity=".75"/>
+  <ellipse cx="400" cy="1110" rx="225" ry="28" fill="#b78a8d" opacity=".18" filter="url(#shadow)"/>
+
+  <!-- floating paper and leaf motifs -->
+  <g opacity=".58" fill="none" stroke="#b9828c" stroke-width="3">
+    <path d="M118 315 C91 285 98 248 136 226 C151 265 146 292 118 315Z"/>
+    <path d="M118 313 C122 281 127 256 136 226"/>
+    <path d="M684 470 C716 441 748 451 757 493 C722 505 698 498 684 470Z"/>
+    <path d="M686 469 C712 477 735 485 757 493"/>
+  </g>
+  <g fill="#fff" opacity=".8" transform="rotate(-10 150 760)">
+    <rect x="92" y="700" width="95" height="130" rx="3"/>
+    <path d="M109 740h58M109 760h46M109 780h61" stroke="#d7a9af" stroke-width="4"/>
+  </g>
+  <g transform="translate(630 790) rotate(12)" opacity=".7">
+    <path d="M0 78 C42 50 74 44 112 57 C84 88 49 101 0 78Z" fill="#caa1a0"/>
+    <path d="M0 78 L112 57" stroke="#8c6266" stroke-width="3"/>
+  </g>
+
+  <!-- hair silhouette -->
+  <path d="M292 272 C263 207 277 120 356 85 C433 51 526 91 542 169 C559 250 536 337 492 386 L318 381 C290 350 277 312 292 272Z" fill="url(#hair)"/>
+  <path d="M301 226 C284 290 285 376 326 422 L361 374 L376 236Z" fill="#583530"/>
+  <path d="M499 211 C523 275 519 361 485 419 L447 375 L442 224Z" fill="#44282a"/>
+  <path d="M314 164 C342 93 450 72 511 150 C483 128 442 116 398 126 C359 135 335 150 314 164Z" fill="#80514a" opacity=".72"/>
+
+  <!-- neck and face -->
+  <path d="M362 340 L365 421 C383 445 422 447 443 421 L441 341Z" fill="#f6cfc0"/>
+  <path d="M316 221 C316 161 356 124 402 124 C460 124 494 164 489 224 L480 303 C473 354 444 382 401 382 C357 382 327 350 320 305Z" fill="#f8d5c7"/>
+  <path d="M318 229 C330 232 341 226 346 212 C351 198 348 183 346 166 C329 179 319 200 318 229Z" fill="#5b3631"/>
+  <path d="M487 216 C475 222 465 216 458 204 C451 191 454 173 459 157 C479 174 488 194 487 216Z" fill="#4b2c2d"/>
+  <path d="M366 253 Q385 241 400 253" fill="none" stroke="#7d4f51" stroke-width="5" stroke-linecap="round"/>
+  <path d="M431 253 Q447 241 462 253" fill="none" stroke="#7d4f51" stroke-width="5" stroke-linecap="round"/>
+  <ellipse cx="383" cy="267" rx="10" ry="13" fill="#ad806e"/>
+  <ellipse cx="445" cy="267" rx="10" ry="13" fill="#ad806e"/>
+  <circle cx="385" cy="269" r="4" fill="#4b3030"/>
+  <circle cx="447" cy="269" r="4" fill="#4b3030"/>
+  <path d="M409 270 Q400 297 411 301" fill="none" stroke="#c5897e" stroke-width="4" stroke-linecap="round"/>
+  <path d="M391 323 Q409 335 429 322" fill="none" stroke="#a96872" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="351" cy="294" r="18" fill="#e9a9ad" opacity=".34"/>
+  <circle cx="467" cy="294" r="18" fill="#e9a9ad" opacity=".34"/>
+
+  <!-- feather pen hair clip -->
+  <g transform="translate(474 128) rotate(18)">
+    <path d="M0 52 C15 25 29 8 55 0 C47 24 29 46 0 52Z" fill="#f3e7dc" stroke="#9d6d70" stroke-width="3"/>
+    <path d="M4 48 L48 8" stroke="#9d6d70" stroke-width="3"/>
+    <path d="M16 37 L13 22M27 28 L25 14M38 19 L37 8" stroke="#9d6d70" stroke-width="2"/>
+  </g>
+
+  <!-- shirt and cardigan torso -->
+  <path d="M356 397 L405 438 L455 397 C498 410 530 450 541 519 L510 685 L290 685 L259 519 C271 452 304 412 356 397Z" fill="#f9f1e8"/>
+  <path d="M354 398 L401 439 L450 398 L445 487 L404 521 L360 484Z" fill="#fffaf3" stroke="#c99998" stroke-width="3"/>
+  <path d="M349 396 C301 409 272 448 261 518 L288 667 L366 652 L351 535 L341 468Z" fill="url(#cardigan)"/>
+  <path d="M450 396 C496 409 527 449 540 518 L512 667 L437 652 L449 535 L459 468Z" fill="url(#cardigan)"/>
+  <path d="M402 440 L402 655" stroke="#b57984" stroke-width="5" opacity=".55"/>
+  <path d="M289 552 Q330 575 366 551" fill="none" stroke="#b57984" stroke-width="4" opacity=".65"/>
+  <path d="M438 552 Q478 575 511 551" fill="none" stroke="#b57984" stroke-width="4" opacity=".65"/>
+  <path d="M345 407 Q399 429 456 407" fill="none" stroke="#c1888e" stroke-width="3"/>
+
+  <!-- arms and hands holding notebook -->
+  <path d="M278 480 C245 519 241 595 265 653 C275 675 299 671 307 650 L326 550Z" fill="#d18f9b"/>
+  <path d="M526 480 C558 520 561 594 536 653 C526 675 503 671 496 650 L477 550Z" fill="#c98592"/>
+  <path d="M276 642 C292 628 313 632 326 647 L342 676 C329 694 303 697 286 685Z" fill="#f4c7ba"/>
+  <path d="M529 642 C513 628 493 632 480 647 L465 676 C479 694 504 697 520 685Z" fill="#f4c7ba"/>
+
+  <!-- notebook -->
+  <g transform="rotate(-3 402 650)">
+    <rect x="330" y="573" width="147" height="190" rx="7" fill="#d9a6ae" stroke="#8c5b66" stroke-width="5"/>
+    <path d="M347 590 H460 V745 H347Z" fill="#eed5d6"/>
+    <path d="M352 626 H456M352 654 H445M352 682 H461M352 710 H430" stroke="#b87d89" stroke-width="4" opacity=".72"/>
+    <g transform="translate(378 606) rotate(-18)">
+      <path d="M0 42 C12 22 30 7 53 0 C47 21 28 39 0 42Z" fill="#fff5e9" stroke="#895d68" stroke-width="3"/>
+      <path d="M4 40 L47 6" stroke="#895d68" stroke-width="3"/>
+      <path d="M16 31 L14 18M27 22 L25 11M38 14 L36 6" stroke="#895d68" stroke-width="2"/>
+      <path d="M2 43 L-6 67" stroke="#895d68" stroke-width="4" stroke-linecap="round"/>
+    </g>
+    <path d="M337 578 V758" stroke="#8c5b66" stroke-width="4" opacity=".7"/>
+  </g>
+
+  <!-- skirt -->
+  <path d="M288 670 C324 683 473 683 511 670 L588 858 C533 895 265 895 212 858Z" fill="#5f3d3d"/>
+  <path d="M287 679 L305 878M329 681 L340 889M372 684 L374 891M416 684 L407 891M458 681 L441 884M498 676 L472 878" stroke="#9a6b6b" stroke-width="6" opacity=".7"/>
+  <path d="M286 670 C340 688 459 688 512 670" fill="none" stroke="#e8c1bd" stroke-width="6"/>
+
+  <!-- legs, socks, loafers -->
+  <path d="M318 880 L391 880 L385 1031 L306 1031Z" fill="#f5c9ba"/>
+  <path d="M416 880 L491 880 L503 1031 L425 1031Z" fill="#f5c9ba"/>
+  <path d="M306 1018 L385 1018 L386 1068 L301 1068Z" fill="#f1eee8"/>
+  <path d="M423 1018 L502 1018 L506 1068 L419 1068Z" fill="#f1eee8"/>
+  <path d="M292 1054 Q340 1036 390 1058 L403 1089 Q373 1110 306 1096 Q287 1085 292 1054Z" fill="#4a302f"/>
+  <path d="M411 1057 Q458 1038 509 1055 L529 1085 Q511 1112 434 1099 Q412 1086 411 1057Z" fill="#4a302f"/>
+  <path d="M304 1058 Q345 1045 380 1059" fill="none" stroke="#b47a7b" stroke-width="6"/>
+  <path d="M427 1061 Q467 1047 501 1059" fill="none" stroke="#b47a7b" stroke-width="6"/>
+
+  <!-- small musical notes -->
+  <g fill="#a56e77" opacity=".55">
+    <path d="M628 240 h8 v38 c0 13 -17 18 -24 9 c-7 -8 0 -19 16 -17z"/>
+    <path d="M662 273 h8 v38 c0 13 -17 18 -24 9 c-7 -8 0 -19 16 -17z"/>
+    <path d="M632 240 h38 v7 h-38z"/>
+  </g>
+</svg>
