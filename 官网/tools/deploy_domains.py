@@ -25,7 +25,7 @@ SITES = (
     ('HushLeaf Discuz forum', 'bbs.hushleaf.top',
      ('bbs.7me.top', 'bbs.weiyan.ink')),
     ('Weiyan personal site', 'weiyan.hushleaf.top',
-     ('weiyan.7me.top', 'weiyan.weiyan.ink')),
+     ('weiyan.7me.top', 'weiyan.weiyan.ink', 'info.weiyan.ink', 'intro.weiyan.ink')),
 )
 HOSTS = tuple(host for _, _, aliases in SITES for host in aliases)
 CHAT_HOSTS = ('7me.top', 'weiyan.ink')

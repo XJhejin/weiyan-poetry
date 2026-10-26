@@ -2,6 +2,8 @@
 
 域名：`https://weiyan.hushleaf.top/`。独立静态站点，使用本地头像与羽毛笔资源，无第三方字体、脚本、统计或嵌入请求。电脑和手机共用内容，支持键盘导航及减少动态效果设置。QQ 群使用独立区块展示，个人 QQ、微信在下方单独列出，支持点击复制。
 
+其他入口：`weiyan.7me.top`、`weiyan.weiyan.ink`、`info.weiyan.ink`、`intro.weiyan.ink`，共用本站内容。DNS 和 HTTPS 配置见 `官网/多域名部署.md`。
+
 内容依据用户指定简介和 B 站公开资料；核实记录见 `资料来源.json`。未言诗集与 HushLeafBBS 分别链接至现有官网和论坛。
 
 音乐身份以月轮谷网络音乐事业部官网成员介绍为依据，并核对成员的 B 站 UID。约稿统一联系 `musicgroup@yuelungu.com`，支持复制邮箱和发起邮件；公司官网、成员介绍均可直接访问。

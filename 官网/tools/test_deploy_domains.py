@@ -63,6 +63,18 @@ class DomainDeploymentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             domains.build_candidate(self.original, {'unexpected.example'})
 
+    def test_personal_aliases_extend_existing_deployment(self):
+        new_aliases = {'info.weiyan.ink', 'intro.weiyan.ink'}
+        previous_hosts = set(domains.HOSTS) - new_aliases
+        deployed = domains.build_candidate(self.original, previous_hosts)
+        upgraded = domains.build_candidate(deployed, domains.HOSTS)
+        self.assertEqual(domains.owned_hosts(upgraded), previous_hosts | new_aliases)
+        self.assertEqual(upgraded, domains.build_candidate(self.original, domains.HOSTS))
+        personal_header = next(line for line in upgraded.splitlines()
+                               if line.startswith('https://weiyan.7me.top'))
+        for host in new_aliases:
+            self.assertIn('https://' + host, personal_header)
+
     def test_refuses_ambiguous_owned_sections(self):
         first = domains.build_candidate(self.original, domains.HOSTS)
         with self.assertRaises(ValueError):
